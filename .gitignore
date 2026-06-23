@@ -343,6 +343,16 @@ tempCodeRunnerFile.ts
 .env.test.local
 .env.production.local
 
+
+# =========================
+
+# Builds
+
+# =========================
+
+release/
+
+
 # =========================
 
 # Others

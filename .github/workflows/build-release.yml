@@ -1,0 +1,115 @@
+name: Build Frontend Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "frontend/**"
+      - ".github/workflows/build-release.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "github-pages"
+  cancel-in-progress: false
+
+jobs:
+  build-frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Create downloadable release package
+        run: |
+          APP_NAME="riool-planning-frontend"
+          RELEASE_DIR="release"
+          PACKAGE_DIR="$RELEASE_DIR/$APP_NAME"
+
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$PACKAGE_DIR"
+
+          cp -r frontend/dist/* "$PACKAGE_DIR/"
+
+          cat > "$RELEASE_DIR/README.txt" <<EOF
+          Riool Planning Frontend - Production Build
+
+          This package contains the built frontend application.
+
+          How to run locally:
+
+          If Python is installed:
+
+            cd $APP_NAME
+            python -m http.server 8080
+
+          Then open:
+
+            http://localhost:8080
+
+          How to host:
+
+          Upload the contents of the '$APP_NAME' folder to any static web server.
+
+          Notes:
+
+          - This is a frontend-only production build.
+          - No npm install is required to use this build.
+          - npm is only needed when creating the build from source.
+          EOF
+
+      - name: Upload downloadable build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: riool-planning-frontend-build
+          path: release
+          retention-days: 14
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: build-frontend
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
