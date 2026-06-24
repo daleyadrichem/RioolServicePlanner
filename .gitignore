@@ -343,6 +343,13 @@ tempCodeRunnerFile.ts
 .env.test.local
 .env.production.local
 
+# =========================
+
+# Data
+
+# =========================
+
+*.db
 
 # =========================
 

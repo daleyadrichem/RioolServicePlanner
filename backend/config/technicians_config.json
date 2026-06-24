@@ -1,0 +1,44 @@
+{
+  "branches": [
+    {
+      "branch_name": "Branch Den Bosch",
+      "technicians": [
+        {
+          "name": "Monteur 1",
+          "status": "ACTIVE",
+          "workday_start": "08:00",
+          "workday_end": "17:00",
+          "requirements": ["VEER", "LADDER"]
+        },
+        {
+          "name": "Monteur 2",
+          "status": "ACTIVE",
+          "workday_start": "08:00",
+          "workday_end": "17:00",
+          "requirements": ["VEER", "LADDER"]
+        },
+        {
+          "name": "Monteur 3",
+          "status": "ACTIVE",
+          "workday_start": "08:00",
+          "workday_end": "17:00",
+          "requirements": ["VEER", "LADDER"]
+        },
+        {
+          "name": "Monteur 4",
+          "status": "ACTIVE",
+          "workday_start": "08:00",
+          "workday_end": "17:00",
+          "requirements": ["LADDER"]
+        },
+        {
+          "name": "Monteur 5",
+          "status": "ACTIVE",
+          "workday_start": "08:00",
+          "workday_end": "17:00",
+          "requirements": []
+        }
+      ]
+    }
+  ]
+}

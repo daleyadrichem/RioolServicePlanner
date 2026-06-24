@@ -1,0 +1,95 @@
+{
+  "scenarios": [
+    {
+      "scenario_id": "normale_dag",
+      "naam": "Normale dag",
+      "branch_name": "Branch Den Bosch",
+      "dag_start_tijd": "08:00",
+      "dag_end_tijd": "17:00",
+      "percentage_urgent": 25,
+      "percentage_mid_prio": 30,
+      "percentage_laag_prio": 45,
+      "requirements_percentages": {
+        "ladder": 20,
+        "veer": 35
+      },
+      "aantal_tickets_min": 18,
+      "aantal_tickets_max": 30,
+      "gemiddelde_ticket_duur_minuten": 60,
+      "radius_km": 30,
+      "reserve_uren_voor_spoed": 2,
+      "lage_prio_mag_opschuiven": true,
+      "subjects": [
+        "Riool verstopt",
+        "Afvoer loopt langzaam door",
+        "Wateroverlast in kruipruimte",
+        "Stankoverlast uit put",
+        "Inspectie afvoerleiding"
+      ]
+    },
+    {
+      "scenario_id": "veel_spoed",
+      "naam": "Veel spoed",
+      "branch_name": "Branch Den Bosch",
+      "dag_start_tijd": "08:00",
+      "dag_end_tijd": "17:00",
+      "percentage_urgent": 50,
+      "percentage_mid_prio": 30,
+      "percentage_laag_prio": 20,
+      "requirements_percentages": {
+        "ladder": 20,
+        "veer": 35
+      },
+      "aantal_tickets_min": 24,
+      "aantal_tickets_max": 38,
+      "gemiddelde_ticket_duur_minuten": 60,
+      "radius_km": 30,
+      "reserve_uren_voor_spoed": 3,
+      "lage_prio_mag_opschuiven": true,
+      "subjects": [
+        "Riool verstopt",
+        "Afvoer loopt langzaam door",
+        "Wateroverlast in kruipruimte",
+        "Stankoverlast uit put",
+        "Inspectie afvoerleiding",
+        "Putdeksel kapot",
+        "Regenpijp verstopt",
+        "Lekkage bij aansluiting",
+        "Periodiek onderhoud",
+        "Camera-inspectie nodig"
+      ]
+    },
+    {
+      "scenario_id": "veel_ladder_tickets",
+      "naam": "Veel tickets met ladder",
+      "branch_name": "Branch Den Bosch",
+      "dag_start_tijd": "08:00",
+      "dag_end_tijd": "17:00",
+      "percentage_urgent": 25,
+      "percentage_mid_prio": 45,
+      "percentage_laag_prio": 30,
+      "requirements_percentages": {
+        "ladder": 60,
+        "veer": 25
+      },
+      "aantal_tickets_min": 18,
+      "aantal_tickets_max": 30,
+      "gemiddelde_ticket_duur_minuten": 60,
+      "radius_km": 30,
+      "reserve_uren_voor_spoed": 2,
+      "lage_prio_mag_opschuiven": true,
+      "subjects": [
+        "Riool verstopt",
+        "Afvoer loopt langzaam door",
+        "Wateroverlast in kruipruimte",
+        "Stankoverlast uit put",
+        "Inspectie afvoerleiding",
+        "Putdeksel kapot",
+        "Regenpijp verstopt",
+        "Lekkage bij aansluiting",
+        "Periodiek onderhoud",
+        "Camera-inspectie nodig"
+      ]
+    }
+  ]
+}

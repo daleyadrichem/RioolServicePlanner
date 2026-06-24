@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from geopy.extra.rate_limiter import RateLimiter
-from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter  # type: ignore[import-untyped]
+from geopy.geocoders import Nominatim  # type: ignore[import-untyped]
 
 
 __all__ = [
