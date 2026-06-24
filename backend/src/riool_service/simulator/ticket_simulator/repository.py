@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -9,9 +11,6 @@ from riool_service.database.models.branch import Branch
 from riool_service.database.models.location import Location
 from riool_service.database.models.requirement import Requirement
 from riool_service.database.models.ticket_subjects import TicketSubject
-
-from .geocoding_types import ResolvedAddress
-from .scenario_types import ScenarioConfig
 
 
 class TicketRepository:
@@ -48,40 +47,33 @@ class TicketRepository:
 
         return subject
 
-    def get_or_create_location(
+    def get_random_ticket_locations(
         self,
         *,
-        scenario: ScenarioConfig,
-        ticket_number: int,
-        formatted_address: str,
-        address: ResolvedAddress,
-        latitude: float,
-        longitude: float,
-    ) -> Location:
-        """Return a known location by formatted address, creating it when needed."""
-        location = (
+        branch: Branch,
+        amount: int,
+        rng: random.Random,
+    ) -> list[Location]:
+        """Return ``amount`` unique pre-seeded locations for simulated tickets."""
+        query = (
             self.session.query(Location)
-            .filter(Location.formatted_address == formatted_address)
-            .one_or_none()
-        )
-
-        if location is None:
-            location = Location(
-                input_address=(
-                    f"Simulated address near {scenario['branch_name']} #{ticket_number}"
-                ),
-                formatted_address=formatted_address,
-                street=address.street,
-                house_number=address.house_number,
-                city=address.city,
-                country=address.country,
-                latitude=latitude,
-                longitude=longitude,
+            .filter(Location.latitude.isnot(None))
+            .filter(Location.longitude.isnot(None))
+            .filter(Location.id != branch.location_id)
+            .filter(
+                Location.input_address.like(f"Simulated address near {branch.name}%")
             )
-            self.session.add(location)
-            self.session.flush()
+        )
+        locations = query.all()
 
-        return location
+        if len(locations) < amount:
+            raise ValueError(
+                f"Scenario needs {amount} unique locations for branch {branch.name!r}, "
+                f"but only {len(locations)} pre-seeded locations are available. "
+                "Increase the count in locations_config.json and rerun initialize_database.py."
+            )
+
+        return rng.sample(locations, amount)
 
     def get_requirement(self, code: str) -> Requirement:
         """Return a requirement by code or raise when it does not exist."""

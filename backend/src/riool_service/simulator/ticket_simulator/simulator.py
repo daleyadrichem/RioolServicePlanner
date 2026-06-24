@@ -4,28 +4,25 @@ from __future__ import annotations
 
 import random
 from datetime import datetime, timedelta, timezone
-from typing import cast
 
 from sqlalchemy.orm import Session
 
 from riool_service.database.models.branch import Branch
+from riool_service.database.models.location import Location
 from riool_service.database.models.requirement import Requirement
 from riool_service.database.models.ticket_requirement import TicketRequirement
 from riool_service.database.models.tickets import Ticket, TicketStatus, TicketUrgency
-from riool_service.geocode_service import address_from_coordinates
 
-from .geocoding_types import ResolvedAddress
-from .geometry import random_coordinates_within_radius
 from .repository import TicketRepository
 from .scenario_types import ScenarioConfig, ScenariosFile
 
 
 class TicketSimulator:
-    """Generate random ticket input data from scenario definitions.
+    """Generate random tickets from scenario definitions and stored locations.
 
-    The simulator creates locations, ticket subjects, tickets, and ticket
-    requirements. It does not create technicians, planning runs, route caches,
-    or planning assignments; those remain planner responsibilities.
+    The simulator creates ticket subjects, tickets, and ticket requirements. It
+    intentionally does not generate or reverse-geocode locations; reusable
+    simulated locations are seeded by ``initialize_database.py``.
     """
 
     def __init__(
@@ -53,7 +50,8 @@ class TicketSimulator:
         """Create random tickets for a scenario and flush them to the session.
 
         The caller owns transaction handling. This method adds objects to the
-        session and flushes so IDs are available, but it does not commit.
+        session and flushes so IDs are available, but it does not commit. Every
+        generated ticket in this batch receives a unique pre-seeded location.
         """
         scenario = self._get_scenario(scenario_id)
         branch = self.repository.get_branch(scenario["branch_name"])
@@ -64,82 +62,54 @@ class TicketSimulator:
             int(scenario["aantal_tickets_max"]),
         )
         base_date = created_date or datetime.now(timezone.utc)
+        locations = self.repository.get_random_ticket_locations(
+            branch=branch,
+            amount=amount,
+            rng=self.random,
+        )
 
-        tickets: list[Ticket] = []
-        attempts = 0
-        max_attempts = amount * 10
-
-        while len(tickets) < amount and attempts < max_attempts:
-            attempts += 1
-            ticket = self._try_generate_ticket(
+        tickets = [
+            self._build_ticket(
                 scenario=scenario,
                 branch=branch,
-                ticket_number=len(tickets) + 1,
+                location=location,
+                ticket_number=index,
                 base_date=base_date,
             )
-            if ticket is None:
-                continue
+            for index, location in enumerate(locations, start=1)
+        ]
 
-            self.session.add(ticket)
-            tickets.append(ticket)
-
-        if len(tickets) < amount:
-            raise RuntimeError(
-                f"Only generated {len(tickets)} of {amount} tickets after "
-                f"{max_attempts} attempts. Geocoding may be returning too many "
-                "'not_found' results."
-            )
-
+        self.session.add_all(tickets)
         self.session.flush()
         return tickets
 
-    def _try_generate_ticket(
+    def _build_ticket(
         self,
         *,
         scenario: ScenarioConfig,
         branch: Branch,
+        location: Location,
         ticket_number: int,
         base_date: datetime,
-    ) -> Ticket | None:
-        """Build one ticket, returning ``None`` when reverse geocoding fails."""
+    ) -> Ticket:
+        """Build one ticket using an already stored unique location."""
         created_at = self._random_datetime_in_day(
             base_date=base_date,
             start_time=scenario["dag_start_tijd"],
             end_time=scenario["dag_end_tijd"],
         )
         urgency = self._random_urgency(scenario)
-        latitude, longitude = random_coordinates_within_radius(
-            rng=self.random,
-            latitude=float(branch.location.latitude),
-            longitude=float(branch.location.longitude),
-            radius_km=float(scenario["radius_km"]),
-        )
-        address = cast(ResolvedAddress, address_from_coordinates(latitude, longitude))
-
-        if address.status == "not_found" or address.house_number is None:
-            return None
-
         subjects = scenario.get("subjects") or ["Algemene storing"]
         subject_name = self.random.choice(subjects)
         subject = self.repository.get_or_create_subject(subject_name)
-        formatted_address = self._format_address(address)
 
-        print(f"Ticket {ticket_number}: {formatted_address}")
-
-        location = self.repository.get_or_create_location(
-            scenario=scenario,
-            ticket_number=ticket_number,
-            formatted_address=formatted_address,
-            address=address,
-            latitude=latitude,
-            longitude=longitude,
-        )
+        print(f"Ticket {ticket_number}: {location.formatted_address}")
 
         ticket = Ticket(
             branch=branch,
             location=location,
             subject=subject,
-            description=self._build_description(scenario, latitude, longitude),
+            description=self._build_description(scenario, location),
             urgency=urgency,
             status=TicketStatus.OPEN,
             created_at=created_at,
@@ -233,18 +203,10 @@ class TicketSimulator:
         return created_at + timedelta(days=3)
 
     @staticmethod
-    def _format_address(address: ResolvedAddress) -> str:
-        """Format a resolved address for storage and duplicate lookup."""
-        return f"{address.street} {address.house_number}, {address.city}, {address.country}"
-
-    @staticmethod
-    def _build_description(
-        scenario: ScenarioConfig,
-        latitude: float,
-        longitude: float,
-    ) -> str:
+    def _build_description(scenario: ScenarioConfig, location: Location) -> str:
         """Build a deterministic description for a generated ticket."""
         return (
             f"Generated by scenario {scenario['scenario_id']}. "
-            f"Coordinates: lat={latitude:.6f}, lon={longitude:.6f}."
+            f"Coordinates: lat={float(location.latitude):.6f}, "
+            f"lon={float(location.longitude):.6f}."
         )
