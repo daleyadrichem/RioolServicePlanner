@@ -1,0 +1,20 @@
+[build-system]
+requires = ["uv-build>=0.2"]
+build-backend = "uv_build"
+
+[project]
+name = "riool_service"
+version = "0.1.0"
+description = "Some description"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+]
+
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tools.setuptools.package.find]
+where = ["src"]
