@@ -46,9 +46,9 @@ class CoordinatesAddress:
 
 _geolocator = Nominatim(user_agent="nxtphase-sewer-planning-case")
 
-_geocode = RateLimiter(_geolocator.geocode, min_delay_seconds=1, max_retries=5)
+_geocode = RateLimiter(_geolocator.geocode, min_delay_seconds=2, max_retries=5)
 
-_reverse_geocode = RateLimiter(_geolocator.reverse, min_delay_seconds=1, max_retries=5)
+_reverse_geocode = RateLimiter(_geolocator.reverse, min_delay_seconds=2, max_retries=5)
 
 
 def coordinates_from_address(
