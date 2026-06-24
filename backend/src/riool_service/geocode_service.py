@@ -46,24 +46,13 @@ class CoordinatesAddress:
 
 _geolocator = Nominatim(user_agent="nxtphase-sewer-planning-case")
 
-_geocode = RateLimiter(
-    _geolocator.geocode,
-    min_delay_seconds=1,
-    max_retries=5
-)
+_geocode = RateLimiter(_geolocator.geocode, min_delay_seconds=1, max_retries=5)
 
-_reverse_geocode = RateLimiter(
-    _geolocator.reverse,
-    min_delay_seconds=1,
-    max_retries=5
-)
+_reverse_geocode = RateLimiter(_geolocator.reverse, min_delay_seconds=1, max_retries=5)
 
 
 def coordinates_from_address(
-    street: str,
-    house_number: str,
-    city: str,
-    country: str
+    street: str, house_number: str, city: str, country: str
 ) -> AddressCoordinates:
     """Resolve an address to latitude and longitude coordinates.
 
@@ -160,8 +149,6 @@ def address_from_coordinates(
         country=address.get("country"),
         status="resolved",
     )
-
-
 
 
 def _format_address(

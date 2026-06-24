@@ -11,13 +11,35 @@ requires-python = ">=3.10"
 
 dependencies = [
     "geopy",
-    "pytest",
-    "pytest-cov"
+    "sqlalchemy",
+    "python-dotenv"
 ]
 
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "mypy"
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = [
+    "geopy.*",
+]
+ignore_missing_imports = true
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
-[tools.setuptools.package.find]
+[tool.setuptools.package.find]
 where = ["src"]
