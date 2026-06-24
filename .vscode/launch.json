@@ -13,6 +13,25 @@
       "env": {
         "PYTHONPATH": "${workspaceFolder}/backend/src"
       }
+    },  
+    {
+      "name": "Debug Ticket Simulator",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/src/riool_service/simulator/generated_ticket_simulator.py",
+      "args": [
+        "normale_dag",
+        "--created-date",
+        "2026-06-23",
+        "--seed",
+        "42"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/backend",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend/src"
+      }
     }
   ]
 }
