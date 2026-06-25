@@ -3,7 +3,7 @@
   "branches": [
     {
       "branch_name": "Branch Den Bosch",
-      "count": 100,
+      "count": 200,
       "radius_km": 30,
       "country": "NL",
       "max_attempts": 5000

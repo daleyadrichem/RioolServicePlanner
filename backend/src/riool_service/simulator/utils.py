@@ -3,7 +3,9 @@ from __future__ import annotations
 import random
 from datetime import date, datetime, time, timedelta
 from math import asin, cos, radians, sin, sqrt
-from typing import Sequence, TypeVar
+from typing import Any, Sequence, TypeVar
+
+from sqlalchemy import select
 
 from riool_service.database.models.tickets import TicketUrgency
 
@@ -14,6 +16,39 @@ URGENCY_DEADLINE_HOURS = {
     TicketUrgency.MEDIUM: 48,
     TicketUrgency.LOW: 72,
 }
+
+
+def clear_model_table(session: Any, model: type[Any]) -> None:
+    """Clear a model table before refilling it.
+
+    Direct dependent rows, such as ticket requirement links, are removed first
+    when they reference rows from the table being cleared.
+    """
+    table = model.__table__
+    primary_key_columns = list(table.primary_key.columns)
+    if len(primary_key_columns) != 1:
+        raise ValueError(f"clear_model_table expects {table.name} to have exactly one primary key")
+
+    primary_key = primary_key_columns[0]
+
+    for dependent_table in reversed(table.metadata.sorted_tables):
+        if dependent_table is table:
+            continue
+
+        referencing_columns = [
+            foreign_key.parent
+            for foreign_key in dependent_table.foreign_keys
+            if foreign_key.column.table is table
+        ]
+        for referencing_column in referencing_columns:
+            session.execute(
+                dependent_table.delete().where(
+                    referencing_column.in_(select(primary_key))
+                )
+            )
+
+    session.execute(table.delete())
+    session.flush()
 
 
 def make_rng(seed: int | None = None) -> random.Random:

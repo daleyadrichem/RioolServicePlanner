@@ -27,6 +27,7 @@ def generate_ticket_data(
     rng: random.Random,
     scenario: ScenarioConfig,
     created_at: datetime,
+    include_urgent: bool = True,
 ) -> GeneratedTicketData:
     urgency = choose_urgency(
         rng,
@@ -34,6 +35,14 @@ def generate_ticket_data(
         scenario.percentage_mid_prio,
         scenario.percentage_low_prio,
     )
+    if not include_urgent:
+        total_percentage = scenario.percentage_mid_prio + scenario.percentage_low_prio
+        if total_percentage <= 0:
+            raise ValueError("At least one of mid or low priority must have a positive percentage")
+        medium_percentage = int(scenario.percentage_mid_prio / total_percentage * 100)
+        low_percentage = 100 - medium_percentage
+        urgency = choose_urgency(rng, 0, medium_percentage, low_percentage)
+
     subject_name = rng.choice(scenario.subjects)
     requirement_codes = maybe_requirement_codes(rng, scenario.requirements_percentages)
 

@@ -7,7 +7,7 @@ from riool_service.database.models.tickets import Ticket, TicketStatus
 
 from riool_service.simulator.config import get_scenario
 from riool_service.simulator.db_helpers import add_requirement_links, choose_location_near_branch, get_branch_by_name, get_or_create_subject
-from riool_service.simulator.utils import combine_day_and_time, make_rng, random_datetime_between
+from riool_service.simulator.utils import clear_model_table, combine_day_and_time, make_rng, random_datetime_between
 from riool_service.simulator.result import SeedResult
 from riool_service.simulator.ticket_factory import generate_ticket_data
 
@@ -46,6 +46,7 @@ def seed_tickets(
     notes: list[str] = []
 
     with session_scope() as session:
+        clear_model_table(session, Ticket)
         branch = get_branch_by_name(session, scenario.branch_name)
 
         for _ in range(ticket_count):
@@ -54,6 +55,7 @@ def seed_tickets(
                 rng=rng,
                 scenario=scenario,
                 created_at=created_at,
+                include_urgent=False
             )
             subject = get_or_create_subject(session, generated.subject_name)
             location = choose_location_near_branch(
