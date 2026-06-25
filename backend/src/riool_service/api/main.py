@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from riool_service.database.db_utils import get_session
 from riool_service.services.simulator_service import service as simulator_service
 from riool_service.services.ticket_service import service as ticket_service
+from riool_service.services.routing import service as routing_service
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -54,6 +55,25 @@ class TicketPayload(BaseModel):
         return self.dict(exclude_unset=True)
 
 
+
+class RoutingTicketSelectionPayload(BaseModel):
+    ticket_ids: list[int]
+    start_ticket_id: int | None = None
+    end_ticket_id: int | None = None
+    refresh_cache: bool = False
+
+    def as_service_payload(self) -> dict[str, Any]:
+        return self.dict()
+
+
+class RoutingTicketMatrixBetweenPayload(BaseModel):
+    source_ticket_ids: list[int]
+    destination_ticket_ids: list[int]
+    refresh_cache: bool = False
+
+    def as_service_payload(self) -> dict[str, Any]:
+        return self.dict()
+
 class AddressValidationPayload(BaseModel):
     address: str
     latitude: float | None = None
@@ -88,6 +108,7 @@ app.add_middleware(
 def startup() -> None:
     simulator_service.ensure_simulator_tables()
     ticket_service.ensure_ticket_tables()
+    routing_service.ensure_routing_tables()
 
 
 @app.get("/", include_in_schema=False)
@@ -170,6 +191,45 @@ def delete_ticket(ticket_id: int, session: SessionDep) -> dict:
         return result
     except ticket_service.TicketNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/routing/tickets/matrix")
+def get_routing_matrix(payload: RoutingTicketSelectionPayload, session: SessionDep) -> dict:
+    try:
+        data = payload.as_service_payload()
+        result = routing_service.get_ticket_route_matrix(
+            session,
+            data["ticket_ids"],
+            refresh_cache=data["refresh_cache"],
+        )
+        session.commit()
+        return result
+    except routing_service.TicketRoutingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except routing_service.RoutingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except routing_service.OsrmProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/routing/tickets/matrix-between")
+def get_routing_matrix_between(payload: RoutingTicketMatrixBetweenPayload, session: SessionDep) -> dict:
+    try:
+        data = payload.as_service_payload()
+        result = routing_service.get_ticket_route_matrix_between(
+            session,
+            data["source_ticket_ids"],
+            data["destination_ticket_ids"],
+            refresh_cache=data["refresh_cache"],
+        )
+        session.commit()
+        return result
+    except routing_service.TicketRoutingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except routing_service.RoutingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except routing_service.OsrmProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/simulator/generate-tickets")
