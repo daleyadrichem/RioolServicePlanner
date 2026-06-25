@@ -19,6 +19,7 @@ from riool_service.database.models.planning_run import PlanningRun as _PlanningR
 from riool_service.database.models.requirement import Requirement as _Requirement  # noqa: F401
 from riool_service.database.models.route_cache import RouteCache as _RouteCache  # noqa: F401
 from riool_service.database.models.simulation_tickets import SimulationTicket as _SimulationTicket  # noqa: F401
+from riool_service.database.models.simulation_state import SimulationState as _SimulationState  # noqa: F401
 from riool_service.database.models.technician import Technician as _Technician  # noqa: F401
 from riool_service.database.models.technician_requirement import (  # noqa: F401
     TechnicianRequirement as _TechnicianRequirement,

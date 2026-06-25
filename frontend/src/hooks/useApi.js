@@ -5,16 +5,17 @@ export function useApi(loadFn, fallbackValue) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (options = {}) => {
+    const silent = Boolean(options.silent);
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError('');
       setData(await loadFn());
     } catch (err) {
       setError('Backend niet bereikbaar. Fallback mockdata wordt getoond.');
       setData(fallbackValue);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [loadFn, fallbackValue]);
 

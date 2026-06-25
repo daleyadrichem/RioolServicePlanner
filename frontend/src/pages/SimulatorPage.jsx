@@ -1,5 +1,5 @@
-import { Calendar, CheckCircle2, ChevronDown, Clock, Edit, FastForward, FolderOpen, HelpCircle, Pause, Play, Plus, RotateCw, Save, SlidersHorizontal, Ticket, Trash2 } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { CheckCircle2, ChevronDown, Clock, Edit, FolderOpen, HelpCircle, Pause, Play, Plus, Save, SlidersHorizontal, Square, Ticket, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { ApiNotice } from '../components/ApiNotice';
@@ -94,17 +94,27 @@ function NewTicketPanel({ onSave }) {
   );
 }
 
-function SimulationControls({ state, onPause, onStep, onReset }) {
+function SimulationControls({ state, onPause, onStop, onSpeedChange }) {
+  const speedOptions = [1, 5, 10, 20];
+
   return (
     <section className="controls">
       <h3>Simulatie controls</h3>
       <p><span className="dot greenDot" /> Status: {state.status}</p>
       <Button onClick={onPause}><Pause size={18} />Pauze</Button>
-      <Button onClick={onStep}><FastForward size={18} />Stap +15 min</Button>
-      <Button onClick={onReset}><RotateCw size={18} />Reset dag</Button>
+      <Button onClick={onStop}><Square size={18} />Stop simulatie</Button>
       <div className="speed">
         <b>Snelheid</b>
-        {['1x', '5x', '10x'].map((speed) => <button key={speed} className={speed === `${state.speed}x` ? 'selected' : ''}>{speed}</button>)}
+        {speedOptions.map((speed) => (
+          <button
+            key={speed}
+            type="button"
+            className={speed === Number(state.speed) ? 'selected' : ''}
+            onClick={() => onSpeedChange(speed)}
+          >
+            {speed}x
+          </button>
+        ))}
       </div>
     </section>
   );
@@ -130,8 +140,16 @@ export function SimulatorPage() {
   const [selectedScenarioId, setSelectedScenarioId] = useState('normale_dag');
   const scenarioList = useMemo(() => scenarios?.length ? scenarios : [{ id: 'normale_dag', name: 'Normale dag' }], [scenarios]);
 
-  const refresh = async () => { await reloadState(); await reloadInjections(); };
+  const refresh = useCallback(async (options = {}) => {
+    await reloadState(options);
+    await reloadInjections(options);
+  }, [reloadState, reloadInjections]);
   const runAction = async (action) => { try { await action(); await refresh(); } catch (err) { alert(err.message); } };
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => refresh({ silent: true }), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [refresh]);
 
   const stats = state.stats || fallbackState.stats;
 
@@ -152,13 +170,13 @@ export function SimulatorPage() {
         <StatCard icon={Ticket} label="Tickets in scenario" value={stats.tickets_in_scenario} sub="incl. injecties" />
         <StatCard icon={Clock} label="Nog niet ingeschoten" value={stats.not_injected} sub="wacht op injectietijd" tone="orange" />
         <StatCard icon={CheckCircle2} label="Vandaag ingeschoten" value={stats.injected_today} sub={`laatste injectie ${stats.last_injection}`} tone="green" />
-        <StatCard icon={RotateCw} label="Huidige simulatietijd" value={state.current_time} sub={`snelheid ${state.speed}x`} tone="blue" />
+        <StatCard icon={Clock} label="Huidige simulatietijd" value={state.current_time} sub={`snelheid ${state.speed}x`} tone="blue" />
       </section>
       <div className="filterRow simF"><UrgencyChips showLabel={false} /><div className="rightFilters"><SelectInput text="Alle types" /><Button><SlidersHorizontal size={18} />Meer filters</Button></div></div>
       <div className="simLayout">
         <InjectionTable injections={injections} onDelete={(id) => runAction(() => api.deleteInjection(id))} />
         <NewTicketPanel onSave={(payload) => runAction(() => api.createInjection(payload))} />
-        <SimulationControls state={state} onPause={() => runAction(api.pauseSimulation)} onStep={() => runAction(() => api.stepSimulation(15))} onReset={() => runAction(api.resetSimulation)} />
+        <SimulationControls state={state} onPause={() => runAction(api.pauseSimulation)} onStop={() => runAction(api.stopSimulation)} onSpeedChange={(speed) => runAction(() => api.setSimulationSpeed(speed))} />
         <ActivityLog items={state.activity_log || []} />
       </div>
     </main>
