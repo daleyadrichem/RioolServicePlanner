@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .planning_run import PlanningRun
     from .technician import Technician
     from .tickets import Ticket
+    from .simulation_tickets import SimulationTicket
 
 
 class Branch(Base):
@@ -35,6 +36,12 @@ class Branch(Base):
 
     tickets: Mapped[list[Ticket]] = relationship(
         "Ticket",
+        back_populates="branch",
+        cascade="all, delete-orphan",
+    )
+
+    simulation_tickets: Mapped[list[SimulationTicket]] = relationship(
+        "SimulationTicket",
         back_populates="branch",
         cascade="all, delete-orphan",
     )

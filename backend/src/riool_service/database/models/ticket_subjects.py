@@ -10,7 +10,7 @@ from riool_service.database.models.tickets import Base
 
 if TYPE_CHECKING:
     from .tickets import Ticket
-
+    from .simulation_tickets import SimulationTicket
 
 class TicketSubject(Base):
     __tablename__ = "ticket_subjects"
@@ -45,6 +45,11 @@ class TicketSubject(Base):
 
     tickets: Mapped[list[Ticket]] = relationship(
         "Ticket",
+        back_populates="subject",
+    )
+
+    simulation_tickets: Mapped[list[SimulationTicket]] = relationship(
+        "SimulationTicket",
         back_populates="subject",
     )
 

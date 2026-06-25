@@ -10,7 +10,7 @@ from riool_service.database.models.tickets import Base
 if TYPE_CHECKING:
     from .requirement import Requirement
     from .tickets import Ticket
-
+    from .simulation_tickets import SimulationTicket
 
 class TicketRequirement(Base):
     __tablename__ = "ticket_requirements"
@@ -25,14 +25,10 @@ class TicketRequirement(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
+
+
     ticket_id: Mapped[int] = mapped_column(
         ForeignKey("tickets.id"),
-        nullable=False,
-        index=True,
-    )
-
-    requirement_id: Mapped[int] = mapped_column(
-        ForeignKey("requirements.id"),
         nullable=False,
         index=True,
     )
@@ -40,6 +36,23 @@ class TicketRequirement(Base):
     ticket: Mapped[Ticket] = relationship(
         "Ticket",
         back_populates="ticket_requirements",
+    )
+
+    simulation_ticket_id: Mapped[int] = mapped_column(
+        ForeignKey("simulation_tickets.id"),
+        nullable=False,
+        index=True,
+    )
+
+    simulation_tickets: Mapped[list[SimulationTicket]] = relationship(
+        "SimulationTicket",
+        back_populates="ticket_requirements",
+    )
+
+    requirement_id: Mapped[int] = mapped_column(
+        ForeignKey("requirements.id"),
+        nullable=False,
+        index=True,
     )
 
     requirement: Mapped[Requirement] = relationship(
