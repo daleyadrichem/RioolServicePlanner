@@ -1,5 +1,5 @@
 import { Calendar, CheckCircle2, ChevronDown, Clock, Edit, FastForward, FolderOpen, HelpCircle, Pause, Play, Plus, RotateCw, Save, SlidersHorizontal, Ticket, Trash2 } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { ApiNotice } from '../components/ApiNotice';
@@ -22,10 +22,12 @@ const fallbackState = {
   activity_log: [{ time: '08:05', message: 'Ticket T-001 ingeschoten', actor: 'Admin' }, { time: '10:15', message: 'Ticket T-007 ingeschoten', actor: 'Admin' }],
 };
 
-function SimulatorToolbar({ onGenerate, onStart }) {
+function SimulatorToolbar({ scenarios, selectedScenarioId, onScenarioChange, onGenerate, onStart }) {
+  const scenarioOptions = scenarios.map((scenario) => ({ value: scenario.id, label: scenario.name }));
+
   return (
     <div className="toolbar sim">
-      <SelectInput text="Scenario Normale dag" />
+      <SelectInput value={selectedScenarioId} onChange={onScenarioChange} options={scenarioOptions} />
       <SearchBox text="Zoeken in scenario's of tickets..." />
       <span />
       <Button><FolderOpen size={20} />Scenario laden</Button>
@@ -41,7 +43,7 @@ function InjectionTable({ injections, onDelete }) {
       <h2>Ticket injecties</h2>
       <table>
         <thead>
-          <tr><th>Tijd</th><th>Ticket ID</th><th>Urgentie</th><th>Ladder</th><th>Veer</th><th>Onderwerp</th><th>Adres</th><th>Status</th><th>Acties</th></tr>
+          <tr><th>Tijd</th><th>Ticket ID</th><th>Urgentie</th><th>Ladder</th><th>Veer</th><th>Onderwerp</th><th>Adres</th><th>Acties</th></tr>
         </thead>
         <tbody>
           {injections.map((row) => (
@@ -53,8 +55,7 @@ function InjectionTable({ injections, onDelete }) {
               <td>{row.requires_spring ? <span className="roundCheck">✓</span> : '–'}</td>
               <td>{row.subject}</td>
               <td>{row.address}</td>
-              <td><Tag>{row.status}</Tag></td>
-              <td><Edit size={18} /> <Trash2 size={18} onClick={() => onDelete(row.id)} /></td>
+              <td><Edit size={18} /> <Trash2 size={18} onClick={() => onDelete(row.database_id || row.id)} /></td>
             </tr>
           ))}
         </tbody>
@@ -122,8 +123,12 @@ function ActivityLog({ items }) {
 export function SimulatorPage() {
   const loadState = useCallback(() => api.getSimulatorState(), []);
   const loadInjections = useCallback(() => api.getInjections(), []);
+  const loadScenarios = useCallback(() => api.getScenarios(), []);
   const { data: state, loading, error, reload: reloadState } = useApi(loadState, fallbackState);
   const { data: injections, reload: reloadInjections } = useApi(loadInjections, fallbackInjections);
+  const { data: scenarios } = useApi(loadScenarios, [{ id: 'normale_dag', name: 'Normale dag' }]);
+  const [selectedScenarioId, setSelectedScenarioId] = useState('normale_dag');
+  const scenarioList = useMemo(() => scenarios?.length ? scenarios : [{ id: 'normale_dag', name: 'Normale dag' }], [scenarios]);
 
   const refresh = async () => { await reloadState(); await reloadInjections(); };
   const runAction = async (action) => { try { await action(); await refresh(); } catch (err) { alert(err.message); } };
@@ -136,7 +141,13 @@ export function SimulatorPage() {
         <div className="profile"><Button><HelpCircle size={18} /></Button><span className="avatar">AD</span><b>Admin</b><ChevronDown size={16} /></div>
       </PageHeader>
       <ApiNotice loading={loading} error={error} />
-      <SimulatorToolbar onGenerate={() => runAction(() => api.generateInjections(5))} onStart={() => runAction(api.startSimulation)} />
+      <SimulatorToolbar
+        scenarios={scenarioList}
+        selectedScenarioId={selectedScenarioId}
+        onScenarioChange={setSelectedScenarioId}
+        onGenerate={() => runAction(() => api.generateScenarioTickets(selectedScenarioId))}
+        onStart={() => runAction(api.startSimulation)}
+      />
       <section className="stats four">
         <StatCard icon={Ticket} label="Tickets in scenario" value={stats.tickets_in_scenario} sub="incl. injecties" />
         <StatCard icon={Clock} label="Nog niet ingeschoten" value={stats.not_injected} sub="wacht op injectietijd" tone="orange" />

@@ -13,7 +13,9 @@ dependencies = [
     "geopy",
     "sqlalchemy",
     "python-dotenv",
-    "pydantic"
+    "pydantic",
+    "uvicorn",
+    "fastapi"
 ]
 
 [dependency-groups]

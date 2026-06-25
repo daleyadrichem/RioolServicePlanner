@@ -25,6 +25,7 @@ export const api = {
   autoPlan: () => request('/planning/auto-plan', { method: 'POST' }),
   replan: () => request('/planning/replan', { method: 'POST' }),
   getSimulatorState: () => request('/simulator/state'),
+  getScenarios: () => request('/simulator/scenarios'),
   startSimulation: () => request('/simulator/start', { method: 'POST' }),
   pauseSimulation: () => request('/simulator/pause', { method: 'POST' }),
   stepSimulation: (minutes = 15) => request(`/simulator/step?minutes=${minutes}`, { method: 'POST' }),
@@ -32,5 +33,6 @@ export const api = {
   getInjections: () => request('/simulator/injections'),
   createInjection: (payload) => request('/simulator/injections', { method: 'POST', body: JSON.stringify(payload) }),
   deleteInjection: (id) => request(`/simulator/injections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  generateScenarioTickets: (scenarioId) => request(`/simulator/generate-tickets?scenario_id=${encodeURIComponent(scenarioId)}`, { method: 'POST' }),
   generateInjections: (count = 5) => request(`/simulator/generate-tickets?count=${count}`, { method: 'POST' }),
 };

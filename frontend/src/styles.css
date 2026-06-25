@@ -160,3 +160,14 @@
   .speed{margin-left:0;border-left:0;padding-left:0;width:100%;}
   .formActions{grid-template-columns:1fr;}
 }
+
+.selectInput select {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: 0;
+  width: 100%;
+  cursor: pointer;
+}
