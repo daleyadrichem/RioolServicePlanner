@@ -8,35 +8,51 @@
           "status": "ACTIVE",
           "workday_start": "08:00",
           "workday_end": "17:00",
-          "requirements": ["VEER", "LADDER"]
+          "requirements": [
+            "VEER",
+            "LADDER"
+          ],
+          "home_address": "Jac. van Looystraat 5, 5216 SB 's-Hertogenbosch"
         },
         {
           "name": "Monteur 2",
           "status": "ACTIVE",
           "workday_start": "08:00",
           "workday_end": "17:00",
-          "requirements": ["VEER", "LADDER"]
+          "requirements": [
+            "VEER",
+            "LADDER"
+          ],
+          "home_address": "Markt 1, 's-Hertogenbosch"
         },
         {
           "name": "Monteur 3",
           "status": "ACTIVE",
           "workday_start": "08:00",
           "workday_end": "17:00",
-          "requirements": ["VEER", "LADDER"]
+          "requirements": [
+            "VEER",
+            "LADDER"
+          ],
+          "home_address": "Stationsplein 1, 's-Hertogenbosch"
         },
         {
           "name": "Monteur 4",
           "status": "ACTIVE",
           "workday_start": "08:00",
           "workday_end": "17:00",
-          "requirements": ["LADDER"]
+          "requirements": [
+            "LADDER"
+          ],
+          "home_address": "Parade 12, 's-Hertogenbosch"
         },
         {
           "name": "Monteur 5",
           "status": "ACTIVE",
           "workday_start": "08:00",
           "workday_end": "17:00",
-          "requirements": []
+          "requirements": [],
+          "home_address": "Hinthamerstraat 72, 's-Hertogenbosch"
         }
       ]
     }

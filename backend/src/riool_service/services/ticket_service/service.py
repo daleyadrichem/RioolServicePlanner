@@ -262,7 +262,8 @@ def list_technicians(session: Session) -> list[dict[str, Any]]:
     technicians = session.scalars(
         select(Technician)
         .options(
-            joinedload(Technician.branch),
+            joinedload(Technician.branch).joinedload(Branch.location),
+            joinedload(Technician.home_location),
             joinedload(Technician.technician_requirements).joinedload(TechnicianRequirement.requirement),
         )
         .order_by(Technician.name)
@@ -274,11 +275,19 @@ def list_technicians(session: Session) -> list[dict[str, Any]]:
             for link in technician.technician_requirements
             if link.requirement is not None and link.requirement.code is not None
         )
+        start_location = technician.start_location
+        end_location = technician.end_location
         result.append({
             "id": technician.id,
             "name": technician.name,
             "branch_id": technician.branch_id,
             "branch_name": technician.branch.name if technician.branch else None,
+            "home_location_id": technician.home_location_id,
+            "home_address": _format_location_address(technician.home_location),
+            "start_location_id": start_location.id if start_location is not None else None,
+            "start_address": _format_location_address(start_location),
+            "end_location_id": end_location.id if end_location is not None else None,
+            "end_address": _format_location_address(end_location),
             "status": _value(technician.status),
             "requirements": requirement_codes,
             "can_use_ladder": "LADDER" in {code.upper() for code in requirement_codes},

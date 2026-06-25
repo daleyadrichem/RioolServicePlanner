@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine, make_url
 
 from riool_service.database.models.base import Base
@@ -66,5 +66,55 @@ def create_database_if_missing(database_url: str) -> None:
 
 
 def create_schema(engine: Engine) -> None:
-    """Create all database tables from SQLAlchemy metadata."""
+    """Create all database tables and apply lightweight schema upgrades.
+
+    This project does not use Alembic yet. ``create_all`` is enough for new
+    databases, but it will not add columns to an existing local database. Keep
+    small backwards-compatible upgrades here until formal migrations are added.
+    """
     Base.metadata.create_all(engine)
+    _ensure_technician_home_location_column(engine)
+
+
+def _ensure_technician_home_location_column(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if "technicians" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("technicians")}
+    if "home_location_id" in columns:
+        return
+
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("ALTER TABLE technicians ADD COLUMN home_location_id INTEGER"))
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_technicians_home_location_id "
+                    "ON technicians (home_location_id)"
+                )
+            )
+            constraint_exists = connection.execute(
+                text(
+                    "SELECT 1 FROM pg_constraint "
+                    "WHERE conname = 'fk_technicians_home_location_id_locations'"
+                )
+            ).scalar_one_or_none()
+            if constraint_exists is None:
+                connection.execute(
+                    text(
+                        "ALTER TABLE technicians ADD CONSTRAINT "
+                        "fk_technicians_home_location_id_locations "
+                        "FOREIGN KEY (home_location_id) REFERENCES locations(id)"
+                    )
+                )
+        elif engine.dialect.name == "sqlite":
+            connection.execute(text("ALTER TABLE technicians ADD COLUMN home_location_id INTEGER"))
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_technicians_home_location_id "
+                    "ON technicians (home_location_id)"
+                )
+            )
+        else:
+            connection.execute(text("ALTER TABLE technicians ADD COLUMN home_location_id INTEGER"))

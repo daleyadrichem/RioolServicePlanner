@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1190" height="2056" viewBox="0 0 1190 2056">
+<svg xmlns="http://www.w3.org/2000/svg" width="1190" height="2078" viewBox="0 0 1190 2078">
 <defs>
 <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
 <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
@@ -10,23 +10,24 @@
 <path d="M350,97 C395,97 395,174 440,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,251 C595,251 595,710 350,710" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,251 C595,251 595,97 350,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M840,251 C595,251 595,1452 350,1452" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M840,251 C595,251 595,1790 350,1790" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M840,251 C595,251 595,1463 350,1463" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M840,251 C595,251 595,1812 350,1812" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M350,710 C195,710 195,97 40,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,644 C795,644 795,174 750,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,644 C795,644 795,174 750,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M440,1059 C395,1059 395,97 350,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M750,1059 C595,1059 595,174 440,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M750,1059 C795,1059 795,1419 840,1419" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M840,1015 C595,1015 595,1452 350,1452" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M840,1015 C595,1015 595,1463 350,1463" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,1015 C795,1015 795,589 750,589" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M350,1452 C195,1452 195,97 40,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M440,1408 C395,1408 395,1790 350,1790" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M350,1463 C195,1463 195,97 40,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M350,1463 C395,1463 395,174 440,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M440,1408 C395,1408 395,1812 350,1812" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M750,1408 C595,1408 595,1059 440,1059" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M750,1408 C595,1408 595,589 440,589" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M350,1790 C195,1790 195,97 40,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M350,1790 C395,1790 395,174 440,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M350,1790 C595,1790 595,1419 840,1419" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M350,1812 C195,1812 195,97 40,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M350,1812 C395,1812 395,174 440,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M350,1812 C595,1812 595,1419 840,1419" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <rect x="40" y="40" width="310" height="114" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
 <rect x="40" y="40" width="310" height="34" rx="10" fill="#1e293b"/>
 <path d="M40,64 H350 V74 H40 Z" fill="#1e293b"/>
@@ -140,18 +141,19 @@
 <text x="854" y="1014" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#0f172a">[PK] id: INTEGER</text>
 <text x="854" y="1036" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] technician_id: INTEGER NOT NULL</text>
 <text x="854" y="1058" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] requirement_id: INTEGER NOT NULL</text>
-<rect x="40" y="1340" width="310" height="224" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+<rect x="40" y="1340" width="310" height="246" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
 <rect x="40" y="1340" width="310" height="34" rx="10" fill="#1e293b"/>
 <path d="M40,1364 H350 V1374 H40 Z" fill="#1e293b"/>
 <text x="54" y="1363" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">technicians</text>
 <text x="54" y="1396" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#0f172a">[PK] id: INTEGER</text>
 <text x="54" y="1418" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] branch_id: INTEGER NOT NULL</text>
 <text x="54" y="1440" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">name: VARCHAR(255) NOT NULL</text>
-<text x="54" y="1462" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">status: VARCHAR(11) NOT NULL</text>
-<text x="54" y="1484" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">workday_start_minutes: INTEGER NOT NULL</text>
-<text x="54" y="1506" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">workday_end_minutes: INTEGER NOT NULL</text>
-<text x="54" y="1528" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">created_at: DATETIME NOT NULL</text>
-<text x="54" y="1550" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">updated_at: DATETIME NOT NULL</text>
+<text x="54" y="1462" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] home_location_id: INTEGER</text>
+<text x="54" y="1484" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">status: VARCHAR(11) NOT NULL</text>
+<text x="54" y="1506" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">workday_start_minutes: INTEGER NOT NULL</text>
+<text x="54" y="1528" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">workday_end_minutes: INTEGER NOT NULL</text>
+<text x="54" y="1550" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">created_at: DATETIME NOT NULL</text>
+<text x="54" y="1572" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">updated_at: DATETIME NOT NULL</text>
 <rect x="440" y="1340" width="310" height="136" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
 <rect x="440" y="1340" width="310" height="34" rx="10" fill="#1e293b"/>
 <path d="M440,1364 H750 V1374 H440 Z" fill="#1e293b"/>
@@ -169,20 +171,20 @@
 <text x="854" y="1440" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">estimated_duration_minutes: INTEGER NOT NULL</text>
 <text x="854" y="1462" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">created_at: DATETIME NOT NULL</text>
 <text x="854" y="1484" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">updated_at: DATETIME NOT NULL</text>
-<rect x="40" y="1634" width="310" height="312" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
-<rect x="40" y="1634" width="310" height="34" rx="10" fill="#1e293b"/>
-<path d="M40,1658 H350 V1668 H40 Z" fill="#1e293b"/>
-<text x="54" y="1657" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">tickets</text>
-<text x="54" y="1690" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#0f172a">[PK] id: INTEGER</text>
-<text x="54" y="1712" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] branch_id: INTEGER NOT NULL</text>
-<text x="54" y="1734" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] location_id: INTEGER NOT NULL</text>
-<text x="54" y="1756" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] subject_id: INTEGER NOT NULL</text>
-<text x="54" y="1778" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">description: TEXT</text>
-<text x="54" y="1800" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">urgency: VARCHAR(6) NOT NULL</text>
-<text x="54" y="1822" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">status: VARCHAR(11) NOT NULL</text>
-<text x="54" y="1844" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">created_at: DATETIME NOT NULL</text>
-<text x="54" y="1866" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">started_at: DATETIME</text>
-<text x="54" y="1888" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">completed_at: DATETIME</text>
-<text x="54" y="1910" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">actual_duration_minutes: INTEGER</text>
-<text x="54" y="1932" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">deadline_at: DATETIME NOT NULL</text>
+<rect x="40" y="1656" width="310" height="312" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+<rect x="40" y="1656" width="310" height="34" rx="10" fill="#1e293b"/>
+<path d="M40,1680 H350 V1690 H40 Z" fill="#1e293b"/>
+<text x="54" y="1679" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">tickets</text>
+<text x="54" y="1712" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#0f172a">[PK] id: INTEGER</text>
+<text x="54" y="1734" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] branch_id: INTEGER NOT NULL</text>
+<text x="54" y="1756" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] location_id: INTEGER NOT NULL</text>
+<text x="54" y="1778" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] subject_id: INTEGER NOT NULL</text>
+<text x="54" y="1800" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">description: TEXT</text>
+<text x="54" y="1822" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">urgency: VARCHAR(6) NOT NULL</text>
+<text x="54" y="1844" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">status: VARCHAR(11) NOT NULL</text>
+<text x="54" y="1866" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">created_at: DATETIME NOT NULL</text>
+<text x="54" y="1888" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">started_at: DATETIME</text>
+<text x="54" y="1910" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">completed_at: DATETIME</text>
+<text x="54" y="1932" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">actual_duration_minutes: INTEGER</text>
+<text x="54" y="1954" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">deadline_at: DATETIME NOT NULL</text>
 </svg>

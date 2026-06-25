@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .route_cache import RouteCache
     from .tickets import Ticket
     from .simulation_tickets import SimulationTicket
+    from .technician import Technician
 
 class Location(Base):
     __tablename__ = "locations"
@@ -57,6 +58,12 @@ class Location(Base):
     branches: Mapped[list[Branch]] = relationship(
         "Branch",
         back_populates="location",
+    )
+
+    technician_homes: Mapped[list[Technician]] = relationship(
+        "Technician",
+        foreign_keys="Technician.home_location_id",
+        back_populates="home_location",
     )
 
     routes_from: Mapped[list[RouteCache]] = relationship(

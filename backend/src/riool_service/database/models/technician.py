@@ -18,6 +18,7 @@ from riool_service.database.models.base import Base
 
 if TYPE_CHECKING:
     from .branch import Branch
+    from .location import Location
     from .planning_assignment import PlanningAssignment
     from .technician_requirement import TechnicianRequirement
 
@@ -40,6 +41,12 @@ class Technician(Base):
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    home_location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("locations.id"),
+        nullable=True,
+        index=True,
+    )
 
     status: Mapped[TechnicianStatus] = mapped_column(
         SqlEnum(TechnicianStatus, name="technician_status"),
@@ -78,6 +85,30 @@ class Technician(Base):
         back_populates="technicians",
     )
 
+    home_location: Mapped[Location | None] = relationship(
+        "Location",
+        foreign_keys=[home_location_id],
+        back_populates="technician_homes",
+    )
+
+    @property
+    def start_location(self) -> Location | None:
+        """Return the technician start location for route planning.
+
+        A technician starts from home when available. If no home location is
+        configured, the branch location is used as a safe fallback.
+        """
+        if self.home_location is not None:
+            return self.home_location
+        if self.branch is not None:
+            return self.branch.location
+        return None
+
+    @property
+    def end_location(self) -> Location | None:
+        """Return the technician end location for route planning."""
+        return self.start_location
+
     technician_requirements: Mapped[list[TechnicianRequirement]] = relationship(
         "TechnicianRequirement",
         back_populates="technician",
@@ -94,5 +125,6 @@ class Technician(Base):
             f"Technician(id={self.id!r}, "
             f"name={self.name!r}, "
             f"branch_id={self.branch_id!r}, "
+            f"home_location_id={self.home_location_id!r}, "
             f"status={self.status!r})"
         )
