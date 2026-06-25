@@ -25,7 +25,6 @@ class AddressCoordinates:
     street: str
     house_number: str
     city: str
-    country: str
     latitude: float | None
     longitude: float | None
     status: _GeocodeStatus
@@ -40,7 +39,6 @@ class CoordinatesAddress:
     street: str | None
     house_number: str | None
     city: str | None
-    country: str | None
     status: _GeocodeStatus
 
 
@@ -52,7 +50,7 @@ _reverse_geocode = RateLimiter(_geolocator.reverse, min_delay_seconds=2, max_ret
 
 
 def coordinates_from_address(
-    street: str, house_number: str, city: str, country: str
+    street: str, house_number: str, city: str
 ) -> AddressCoordinates:
     """Resolve an address to latitude and longitude coordinates.
 
@@ -64,8 +62,6 @@ def coordinates_from_address(
         House number.
     city : str
         City name.
-    country : str
-        Country name.
 
     Returns
     -------
@@ -75,9 +71,7 @@ def coordinates_from_address(
     street = street.strip()
     house_number = house_number.strip()
     city = city.strip()
-    country = country.strip()
-
-    address = _format_address(street, house_number, city, country)
+    address = _format_address(street, house_number, city)
     location = _geocode(address)
 
     if location is None:
@@ -85,7 +79,6 @@ def coordinates_from_address(
             street=street,
             house_number=house_number,
             city=city,
-            country=country,
             latitude=None,
             longitude=None,
             status="not_found",
@@ -95,7 +88,6 @@ def coordinates_from_address(
         street=street,
         house_number=house_number,
         city=city,
-        country=country,
         latitude=float(location.latitude),
         longitude=float(location.longitude),
         status="resolved",
@@ -134,7 +126,6 @@ def address_from_coordinates(
             street=None,
             house_number=None,
             city=None,
-            country=None,
             status="not_found",
         )
 
@@ -146,7 +137,6 @@ def address_from_coordinates(
         street=address.get("road"),
         house_number=address.get("house_number"),
         city=_get_city(address),
-        country=address.get("country"),
         status="resolved",
     )
 
@@ -155,10 +145,9 @@ def _format_address(
     street: str,
     house_number: str,
     city: str,
-    country: str,
 ) -> str:
     """Format address parts for geocoding."""
-    return f"{street} {house_number}, {city}, {country}"
+    return f"{street} {house_number}, {city}"
 
 
 def _get_city(address: dict[str, str]) -> str | None:

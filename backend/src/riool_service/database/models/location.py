@@ -27,7 +27,6 @@ class Location(Base):
     street: Mapped[str | None] = mapped_column(String(255), nullable=True)
     house_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     city: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    country: Mapped[str] = mapped_column(String(2), default="NL", nullable=False)
 
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)

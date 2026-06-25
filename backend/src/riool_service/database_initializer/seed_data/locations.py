@@ -30,7 +30,6 @@ def seed_simulated_locations(session: Session, config: dict[str, Any]) -> None:
         branch_name = str(branch_config["branch_name"])
         target_count = int(branch_config.get("count", 0))
         radius_km = float(branch_config["radius_km"])
-        country = str(branch_config.get("country", "NL"))
         max_attempts = int(
             branch_config.get(
                 "max_attempts",
@@ -73,7 +72,6 @@ def seed_simulated_locations(session: Session, config: dict[str, Any]) -> None:
             location = _simulated_location_from_address(
                 address=address,
                 branch_name=branch_name,
-                fallback_country=country,
                 seen_addresses=seen_addresses,
             )
             if location is None:
@@ -102,7 +100,6 @@ def _simulated_location_from_address(
     *,
     address: CoordinatesAddress,
     branch_name: str,
-    fallback_country: str,
     seen_addresses: set[str],
 ) -> Location | None:
     """Build a simulated Location from a reverse-geocoded dataclass."""
@@ -114,10 +111,7 @@ def _simulated_location_from_address(
     ):
         return None
 
-    country = address.country or fallback_country
-    formatted_address = (
-        f"{address.street} {address.house_number}, {address.city}, {country}"
-    )
+    formatted_address = f"{address.street} {address.house_number}, {address.city}"
     if formatted_address in seen_addresses:
         return None
 
@@ -128,7 +122,6 @@ def _simulated_location_from_address(
         street=address.street,
         house_number=address.house_number,
         city=address.city,
-        country=country,
         latitude=address.latitude,
         longitude=address.longitude,
     )

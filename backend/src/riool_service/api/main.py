@@ -28,7 +28,6 @@ class SimulationTicketPayload(BaseModel):
     location_id: int | None = None
     latitude: float | None = None
     longitude: float | None = None
-    country: str | None = "NL"
 
     def as_service_payload(self) -> dict[str, Any]:
         return self.dict()
@@ -36,7 +35,6 @@ class SimulationTicketPayload(BaseModel):
 
 class AddressValidationPayload(BaseModel):
     address: str
-    country: str | None = "NL"
     latitude: float | None = None
     longitude: float | None = None
 

@@ -12,12 +12,11 @@ from riool_service.database.models.location import Location
 from riool_service.geocode_service import AddressCoordinates, coordinates_from_address
 
 ORIGINAL_LOCATION: Final[dict[str, str]] = {
-    "input_address": "Jac. van Looystraat 5, 5216 SB 's-Hertogenbosch, NL",
-    "formatted_address": "Jac. van Looystraat 5, 5216 SB 's-Hertogenbosch, Netherlands",
+    "input_address": "Jac. van Looystraat 5, 5216 SB 's-Hertogenbosch",
+    "formatted_address": "Jac. van Looystraat 5, 5216 SB 's-Hertogenbosch",
     "street": "Jac. van Looystraat",
     "house_number": "5",
     "city": "'s-Hertogenbosch",
-    "country": "NL",
 }
 
 ORIGINAL_BRANCH_NAME: Final[str] = "Branch Den Bosch"
@@ -38,7 +37,6 @@ def seed_original_branch(session: Session) -> Branch:
             ORIGINAL_LOCATION["street"],
             ORIGINAL_LOCATION["house_number"],
             ORIGINAL_LOCATION["city"],
-            ORIGINAL_LOCATION["country"],
         )
         location = _branch_location_from_coordinates(coordinates)
         session.add(location)

@@ -155,11 +155,27 @@ def _requirement_codes(ticket: SimulationTicket) -> set[str]:
     }
 
 
+def _format_location_address(street: str | None, house_number: str | None, city: str | None) -> str:
+    if street and house_number and city:
+        return f"{street} {house_number}, {city}"
+    return ""
+
+
+def _strip_country_from_address(address: str) -> str:
+    parts = [part.strip() for part in str(address or "").split(",") if part.strip()]
+    if len(parts) > 2:
+        return ", ".join(parts[:2])
+    return str(address or "").strip()
+
+
 def _ticket_address(ticket: SimulationTicket) -> str:
     location = ticket.location
     if not location:
         return ""
-    return location.formatted_address or location.input_address or location.city or ""
+    formatted = _format_location_address(location.street, location.house_number, location.city)
+    if formatted:
+        return formatted
+    return _strip_country_from_address(location.formatted_address or location.input_address or location.city or "")
 
 
 def generate_scenario_tickets(session: Session, scenario_id: str, seed: int | None = None) -> dict[str, Any]:
@@ -298,7 +314,9 @@ def _branch_for_state(session: Session, state: SimulationState) -> Branch:
 
 
 _MANUAL_ADDRESS_PATTERN = re.compile(
-    r"^\s*(?P<street>.+?)\s+(?P<house_number>\d+[A-Za-z]?(?:[-/][0-9A-Za-z]+)?)\s*,\s*(?P<city>[^,]+)\s*$"
+    r"^\s*(?P<street>.+?)\s+"
+    r"(?P<house_number>\d+[A-Za-z]?(?:[-/][0-9A-Za-z]+)?)\s*,\s*"
+    r"(?P<city>[^,]+)\s*$"
 )
 
 
@@ -311,7 +329,8 @@ def _parse_manual_address(address: str) -> dict[str, str]:
     if match is None:
         raise ValueError("Adres moet het formaat 'straat huisnummer, plaats' hebben, bijvoorbeeld 'Kerkstraat 12, Den Bosch'.")
 
-    parsed = {key: value.strip() for key, value in match.groupdict().items()}
+    raw = match.groupdict()
+    parsed = {key: (value or "").strip() for key, value in raw.items()}
     if not parsed["street"] or not parsed["house_number"] or not parsed["city"]:
         raise ValueError("Adres moet een straat, huisnummer en plaats bevatten.")
     return parsed
@@ -326,7 +345,6 @@ def validate_manual_address(payload: dict[str, Any]) -> dict[str, Any]:
     """
     address = str(payload.get("address") or "").strip()
     parsed = _parse_manual_address(address)
-    country = str(payload.get("country") or "NL").strip() or "NL"
 
     latitude = payload.get("latitude")
     longitude = payload.get("longitude")
@@ -337,7 +355,6 @@ def validate_manual_address(payload: dict[str, Any]) -> dict[str, Any]:
             "street": parsed["street"],
             "house_number": parsed["house_number"],
             "city": parsed["city"],
-            "country": country,
             "latitude": float(latitude),
             "longitude": float(longitude),
             "status": "resolved",
@@ -348,7 +365,6 @@ def validate_manual_address(payload: dict[str, Any]) -> dict[str, Any]:
             parsed["street"],
             parsed["house_number"],
             parsed["city"],
-            country,
         )
     except Exception as exc:  # pragma: no cover - depends on external geocoder availability
         raise ValueError("Adrescontrole is mislukt. Controleer je internetverbinding of probeer het later opnieuw.") from exc
@@ -362,7 +378,6 @@ def validate_manual_address(payload: dict[str, Any]) -> dict[str, Any]:
         "street": coordinates.street,
         "house_number": coordinates.house_number,
         "city": coordinates.city,
-        "country": coordinates.country,
         "latitude": coordinates.latitude,
         "longitude": coordinates.longitude,
         "status": coordinates.status,
@@ -395,7 +410,6 @@ def _get_or_create_manual_location(session: Session, *, branch: Branch, payload:
         street=resolved["street"],
         house_number=resolved["house_number"],
         city=resolved["city"],
-        country=resolved["country"],
         latitude=float(resolved["latitude"]),
         longitude=float(resolved["longitude"]),
     )
