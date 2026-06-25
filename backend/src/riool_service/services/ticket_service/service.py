@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -19,6 +19,7 @@ from riool_service.database.models.technician_requirement import TechnicianRequi
 from riool_service.database.models.ticket_requirement import TicketRequirement
 from riool_service.database.models.ticket_subjects import TicketSubject
 from riool_service.database.models.tickets import Ticket, TicketStatus, TicketUrgency
+from riool_service.database.models.simulation_state import SimulationState, SimulationStatus
 from riool_service.database.db_utils import get_engine
 from riool_service.simulator.db_helpers import add_requirement_links, get_branch_by_name, get_or_create_subject
 from riool_service.simulator.utils import deadline_for
@@ -382,6 +383,39 @@ def _get_or_create_location(session: Session, payload: dict[str, Any]) -> Locati
     return location
 
 
+
+
+def _created_at_for_manual_ticket(session: Session) -> datetime:
+    """Use the simulator clock while a simulator session is active.
+
+    When the simulator is stopped, a planner-created ticket represents a real
+    manual ticket and should use wall-clock time. In every other simulator
+    status, the ticket belongs to the simulated day and should receive the
+    current simulation timestamp.
+    """
+    state = session.get(SimulationState, 1)
+    if state is None or state.status == SimulationStatus.STOPPED:
+        return datetime.now()
+
+    if state.status == SimulationStatus.RUNNING:
+        now = datetime.now()
+        if state.last_tick_real_time is None:
+            state.last_tick_real_time = now
+        else:
+            elapsed_real_seconds = max(0.0, (now - state.last_tick_real_time).total_seconds())
+            elapsed_sim_seconds = elapsed_real_seconds * max(1, state.speed_multiplier)
+            next_time = state.current_simulation_time + timedelta(seconds=elapsed_sim_seconds)
+            if next_time >= state.day_end_at:
+                state.current_simulation_time = state.day_end_at
+                state.status = SimulationStatus.COMPLETED
+                state.last_tick_real_time = None
+            else:
+                state.current_simulation_time = next_time
+                state.last_tick_real_time = now
+
+    return state.current_simulation_time
+
+
 def create_ticket(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     branch = _branch_from_payload(session, payload)
     subject_name = str(payload.get("subject") or "").strip()
@@ -389,7 +423,7 @@ def create_ticket(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("subject is required")
     subject = get_or_create_subject(session, subject_name)
     location = _get_or_create_location(session, payload)
-    created_at = datetime.now()
+    created_at = _created_at_for_manual_ticket(session)
     urgency = normalize_urgency(payload.get("urgency", "medium"))
 
     ticket = Ticket(

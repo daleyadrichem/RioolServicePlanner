@@ -7,7 +7,7 @@ from riool_service.database.models.simulation_tickets import SimulationTicket
 
 from riool_service.simulator.config import get_scenario
 from riool_service.simulator.db_helpers import add_requirement_links, choose_location_near_branch, get_branch_by_name, get_or_create_subject
-from riool_service.simulator.utils import clear_model_table, combine_day_and_time, make_rng, random_datetime_between
+from riool_service.simulator.utils import clear_rows_by_description_marker, combine_day_and_time, make_rng, random_datetime_between
 from riool_service.simulator.result import SeedResult
 from riool_service.simulator.ticket_factory import generate_ticket_data
 
@@ -41,7 +41,7 @@ def seed_simulation_tickets(
     notes: list[str] = []
 
     with session_scope() as session:
-        clear_model_table(session, SimulationTicket)
+        clear_rows_by_description_marker(session, SimulationTicket, "Simulator ticket voor scenario")
         branch = get_branch_by_name(session, scenario.branch_name)
 
         for day_offset, amount in _planned_submission_days(scenario):

@@ -51,6 +51,49 @@ def clear_model_table(session: Any, model: type[Any]) -> None:
     session.flush()
 
 
+
+
+def clear_rows_by_description_marker(session: Any, model: type[Any], marker: str) -> int:
+    """Delete only rows whose description contains a simulator marker.
+
+    This protects manually created tickets from being removed when the
+    simulator is regenerated or cleared. Dependent rows are removed first so
+    this works even when the database does not have ON DELETE CASCADE.
+    """
+    table = model.__table__
+    primary_key_columns = list(table.primary_key.columns)
+    if len(primary_key_columns) != 1:
+        raise ValueError(f"clear_rows_by_description_marker expects {table.name} to have exactly one primary key")
+    if "description" not in table.c:
+        raise ValueError(f"{table.name} does not have a description column")
+
+    primary_key = primary_key_columns[0]
+    ids = [
+        row[0]
+        for row in session.execute(
+            select(primary_key).where(table.c.description.contains(marker))
+        ).all()
+    ]
+    if not ids:
+        return 0
+
+    for dependent_table in reversed(table.metadata.sorted_tables):
+        if dependent_table is table:
+            continue
+
+        referencing_columns = [
+            foreign_key.parent
+            for foreign_key in dependent_table.foreign_keys
+            if foreign_key.column.table is table
+        ]
+        for referencing_column in referencing_columns:
+            session.execute(dependent_table.delete().where(referencing_column.in_(ids)))
+
+    session.execute(table.delete().where(primary_key.in_(ids)))
+    session.flush()
+    return len(ids)
+
+
 def make_rng(seed: int | None = None) -> random.Random:
     """Create a local RNG so simulations can be reproducible."""
     return random.Random(seed)
