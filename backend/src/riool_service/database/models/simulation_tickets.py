@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING
+from riool_service.database.models.base import Base
 
 from sqlalchemy import (
     DateTime,
@@ -11,7 +12,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from riool_service.database.models.tickets import Base, TicketUrgency
+from riool_service.database.models.tickets import TicketUrgency
 
 if TYPE_CHECKING:
     from .branch import Branch

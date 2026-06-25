@@ -255,3 +255,47 @@
     min-width:0;
   }
 }
+.btn:disabled,
+.fieldInput:disabled,
+.newTicket input:disabled,
+.newTicket select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.disabledPanel {
+  background: #f5f7fb;
+  opacity: .72;
+}
+.panelHint {
+  margin: 0 0 8px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.rowActions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+.rowActions button {
+  border: 0;
+  background: transparent;
+  color: #253858;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+}
+.rowActions button:hover {
+  color: var(--blue);
+}
+.mutedActions {
+  color: #9aa4b2;
+  font-weight: 800;
+}
+
+body.waitingCursor,
+body.waitingCursor * {
+  cursor: wait !important;
+}

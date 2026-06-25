@@ -6,8 +6,22 @@ async function request(path, options = {}) {
     ...options,
   });
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || `API request failed: ${response.status}`);
+    const rawDetail = await response.text();
+    let detail = rawDetail;
+    try {
+      const parsed = JSON.parse(rawDetail);
+      detail = parsed.detail || parsed.message || rawDetail;
+      if (Array.isArray(detail)) {
+        detail = detail
+          .map((item) => item?.msg || item?.message || JSON.stringify(item))
+          .join('\n');
+      } else if (detail && typeof detail === 'object') {
+        detail = detail.message || detail.msg || JSON.stringify(detail);
+      }
+    } catch {
+      // Keep raw response text.
+    }
+    throw new Error(String(detail || `API request failed: ${response.status}`));
   }
   return response.json();
 }
@@ -32,7 +46,9 @@ export const api = {
   stopSimulation: () => request('/simulator/stop', { method: 'POST' }),
   setSimulationSpeed: (speedMultiplier) => request(`/simulator/speed?speed_multiplier=${speedMultiplier}`, { method: 'PATCH' }),
   getInjections: () => request('/simulator/injections'),
+  validateSimulatorAddress: (payload) => request('/simulator/validate-address', { method: 'POST', body: JSON.stringify(payload) }),
   createInjection: (payload) => request('/simulator/injections', { method: 'POST', body: JSON.stringify(payload) }),
+  updateInjection: (id, payload) => request(`/simulator/injections/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteInjection: (id) => request(`/simulator/injections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   generateScenarioTickets: (scenarioId) => request(`/simulator/generate-tickets?scenario_id=${encodeURIComponent(scenarioId)}`, { method: 'POST' }),
   generateInjections: (count = 5) => request(`/simulator/generate-tickets?count=${count}`, { method: 'POST' }),

@@ -45,7 +45,7 @@ function SimulatorToolbar({ scenarios, selectedScenarioId, onScenarioChange, onG
         ))}
       </div>
       <Button><FolderOpen size={20} />Scenario laden</Button>
-      <Button onClick={onGenerate}><Plus size={20} />Tickets genereren</Button>
+      <Button onClick={onGenerate} disabled={isRunning}><Plus size={20} />Tickets genereren</Button>
       <Button onClick={onStop}><Square size={18} />Stop simulatie</Button>
       <Button primary onClick={onToggleSimulation}>{isRunning ? <Pause size={20} /> : <Play size={20} />}{isRunning ? 'Pauze' : 'Start simulatie'}</Button>
     </div>
@@ -56,6 +56,15 @@ function isSimulationRunning(status) {
   const normalized = String(status || '').toLowerCase();
   return ['draait', 'running', 'actief', 'active', 'gestart', 'started'].some((value) => normalized.includes(value));
 }
+
+function isValidInjectTime(value) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || '').trim());
+}
+
+function isValidManualAddressFormat(value) {
+  return /^\s*.+?\s+\d+[A-Za-z]?(?:[-/][0-9A-Za-z]+)?\s*,\s*[^,]+\s*$/.test(String(value || ''));
+}
+
 
 function matchesFilter(row, filters) {
   const urgency = toUrgencyApiValue(row.urgency);
@@ -115,7 +124,7 @@ function SimulatorFilters({ filters, onChange }) {
   );
 }
 
-function InjectionTable({ injections, onDelete }) {
+function InjectionTable({ injections, onDelete, onEdit, disabledActions }) {
   return (
     <section className="tableCard simTable">
       <h2>Ticket injecties</h2>
@@ -133,7 +142,16 @@ function InjectionTable({ injections, onDelete }) {
               <td>{row.requires_spring ? <span className="roundCheck">✓</span> : '–'}</td>
               <td>{row.subject}</td>
               <td>{row.address}</td>
-              <td><Edit size={18} /> <Trash2 size={18} onClick={() => onDelete(row.database_id || row.id)} /></td>
+              <td>
+                {disabledActions ? (
+                  <span className="mutedActions">–</span>
+                ) : (
+                  <span className="rowActions">
+                    <button type="button" aria-label="Ticket aanpassen" onClick={() => onEdit(row)}><Edit size={18} /></button>
+                    <button type="button" aria-label="Ticket verwijderen" onClick={() => onDelete(row.database_id || row.id)}><Trash2 size={18} /></button>
+                  </span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -142,31 +160,119 @@ function InjectionTable({ injections, onDelete }) {
   );
 }
 
-function NewTicketPanel({ onSave }) {
-  const [form, setForm] = useState({ inject_time: '12:00', urgency: 'medium', subject: 'Lekkage keuken', address: 'De Ruyterstraat 12, Den Bosch', city: 'Den Bosch', requires_ladder: false, requires_spring: false });
+const emptyTicketForm = {
+  inject_time: '12:00',
+  urgency: 'medium',
+  subject: '',
+  address: '',
+  city: 'Den Bosch',
+  requires_ladder: false,
+  requires_spring: false,
+};
+
+function formFromInjection(ticket) {
+  if (!ticket) return { ...emptyTicketForm, subject: 'Lekkage keuken', address: 'De Ruyterstraat 12, Den Bosch' };
+
+  return {
+    inject_time: ticket.inject_time || '12:00',
+    urgency: toUrgencyApiValue(ticket.urgency || 'medium'),
+    subject: ticket.subject || '',
+    address: ticket.address || '',
+    city: ticket.city || 'Den Bosch',
+    requires_ladder: Boolean(ticket.requires_ladder),
+    requires_spring: Boolean(ticket.requires_spring),
+  };
+}
+
+function NewTicketPanel({ onSave, editingTicket, onCancelEdit, disabled }) {
+  const [form, setForm] = useState(() => formFromInjection(null));
+  const [checkingAddress, setCheckingAddress] = useState(false);
+  const isEditing = Boolean(editingTicket);
+  const formDisabled = disabled || checkingAddress;
+
+  useEffect(() => {
+    setForm(formFromInjection(editingTicket));
+  }, [editingTicket]);
+
+  useEffect(() => {
+    document.body.classList.toggle('waitingCursor', checkingAddress);
+    return () => document.body.classList.remove('waitingCursor');
+  }, [checkingAddress]);
+
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const resetNewForm = () => setForm({ ...emptyTicketForm, subject: 'Lekkage keuken', address: 'De Ruyterstraat 12, Den Bosch' });
+  const handleCancel = () => {
+    if (!isEditing) return;
+    onCancelEdit();
+    resetNewForm();
+  };
+  const handleSave = async () => {
+    const injectTime = String(form.inject_time || '').trim();
+    const address = String(form.address || '').trim();
+
+    if (!isValidInjectTime(injectTime)) {
+      window.alert('Gebruik voor de injectietijd het formaat HH:MM, bijvoorbeeld 09:30.');
+      return;
+    }
+
+    if (!isValidManualAddressFormat(address)) {
+      window.alert("Gebruik voor het adres het formaat 'straat huisnummer, plaats', bijvoorbeeld 'Kerkstraat 12, Den Bosch'.");
+      return;
+    }
+
+    setCheckingAddress(true);
+    try {
+      const resolvedAddress = await api.validateSimulatorAddress({ address });
+      await onSave({
+        ...form,
+        ...resolvedAddress,
+        address: resolvedAddress.formatted_address || address,
+        inject_time: injectTime,
+        urgency: toUrgencyApiValue(form.urgency),
+      });
+      if (!isEditing) resetNewForm();
+    } catch (err) {
+      window.alert(err.message || 'Adrescontrole mislukt. Het ticket is niet opgeslagen.');
+    } finally {
+      setCheckingAddress(false);
+    }
+  };
 
   return (
-    <aside className="newTicket">
-      <h2>Nieuw ticket</h2>
+    <aside className={`newTicket ${disabled ? 'disabledPanel' : ''}`}>
+      <h2>{isEditing ? 'Ticket aanpassen' : 'Nieuw ticket'}</h2>
+      {disabled && <p className="panelHint">Pauzeer de simulatie om simulator tickets toe te voegen of aan te passen.</p>}
+      {checkingAddress && <p className="panelHint">Adres wordt gecontroleerd...</p>}
       <label>Injectietijd</label>
-      <input className="fieldInput" value={form.inject_time} onChange={(event) => setField('inject_time', event.target.value)} />
+      <input
+        className="fieldInput"
+        disabled={formDisabled}
+        value={form.inject_time}
+        placeholder="HH:MM"
+        onChange={(event) => setField('inject_time', event.target.value)}
+      />
       <label>Urgentie</label>
-      <select className="fieldInput" value={form.urgency} onChange={(event) => setField('urgency', event.target.value)}>
+      <select className="fieldInput" disabled={formDisabled} value={form.urgency} onChange={(event) => setField('urgency', event.target.value)}>
         <option value="urgent">Urgent</option><option value="medium">Normaal</option><option value="low">Laag</option>
       </select>
       <label>Onderwerp</label>
-      <input className="fieldInput" value={form.subject} onChange={(event) => setField('subject', event.target.value)} />
+      <input className="fieldInput" disabled={formDisabled} value={form.subject} onChange={(event) => setField('subject', event.target.value)} />
       <label>Adres</label>
-      <input className="fieldInput" value={form.address} onChange={(event) => setField('address', event.target.value)} />
+      <input
+        className="fieldInput"
+        disabled={formDisabled}
+        value={form.address}
+        placeholder="Kerkstraat 12, Den Bosch"
+        onChange={(event) => setField('address', event.target.value)}
+      />
       <label>Requirement</label>
       <div className="checks">
-        <label><input type="checkbox" checked={form.requires_ladder} onChange={(event) => setField('requires_ladder', event.target.checked)} /> Ladder</label>
-        <label><input type="checkbox" checked={form.requires_spring} onChange={(event) => setField('requires_spring', event.target.checked)} /> Veer</label>
+        <label><input type="checkbox" disabled={formDisabled} checked={form.requires_ladder} onChange={(event) => setField('requires_ladder', event.target.checked)} /> Ladder</label>
+        <label><input type="checkbox" disabled={formDisabled} checked={form.requires_spring} onChange={(event) => setField('requires_spring', event.target.checked)} /> Veer</label>
       </div>
       <div className="formActions">
-        <Button primary onClick={() => onSave({ ...form, urgency: toUrgencyApiValue(form.urgency) })}><Save size={18} />Opslaan</Button>
-        <Button onClick={() => setForm({ inject_time: '12:00', urgency: 'medium', subject: '', address: '', city: 'Den Bosch', requires_ladder: false, requires_spring: false })}>Annuleren</Button>
+        <Button primary disabled={formDisabled} onClick={handleSave}><Save size={18} />{checkingAddress ? 'Controleren...' : 'Opslaan'}</Button>
+        <Button disabled={!isEditing || formDisabled} onClick={handleCancel}>Annuleren</Button>
       </div>
     </aside>
   );
@@ -191,7 +297,9 @@ export function SimulatorPage() {
   const { data: scenarios } = useApi(loadScenarios, [{ id: 'normale_dag', name: 'Normale dag' }]);
   const [selectedScenarioId, setSelectedScenarioId] = useState('normale_dag');
   const [filters, setFilters] = useState({ urgency: 'all', requirement: 'Alle requirements' });
+  const [editingTicket, setEditingTicket] = useState(null);
   const scenarioList = useMemo(() => scenarios?.length ? scenarios : [{ id: 'normale_dag', name: 'Normale dag' }], [scenarios]);
+  const simulationIsRunning = isSimulationRunning(state?.status);
 
   const refresh = useCallback(async (options = {}) => {
     await reloadState(options);
@@ -204,8 +312,20 @@ export function SimulatorPage() {
     return () => window.clearInterval(intervalId);
   }, [refresh]);
 
+  useEffect(() => {
+    if (simulationIsRunning) setEditingTicket(null);
+  }, [simulationIsRunning]);
+
   const filteredInjections = useMemo(() => (injections || []).filter((row) => matchesFilter(row, filters)), [injections, filters]);
   const stats = state.stats || fallbackState.stats;
+  const saveSimulationTicket = async (payload) => {
+    if (editingTicket) {
+      await runAction(() => api.updateInjection(editingTicket.database_id || editingTicket.id, payload));
+      setEditingTicket(null);
+      return;
+    }
+    await runAction(() => api.createInjection(payload));
+  };
 
   return (
     <main className="page">
@@ -217,7 +337,7 @@ export function SimulatorPage() {
         scenarios={scenarioList}
         selectedScenarioId={selectedScenarioId}
         onScenarioChange={setSelectedScenarioId}
-        onGenerate={() => runAction(() => api.generateScenarioTickets(selectedScenarioId))}
+        onGenerate={() => simulationIsRunning ? undefined : runAction(() => api.generateScenarioTickets(selectedScenarioId))}
         state={state}
         onToggleSimulation={() => runAction(isSimulationRunning(state.status) ? api.pauseSimulation : api.startSimulation)}
         onStop={() => runAction(api.stopSimulation)}
@@ -231,8 +351,18 @@ export function SimulatorPage() {
       </section>
       <SimulatorFilters filters={filters} onChange={setFilters} />
       <div className="simLayout">
-        <InjectionTable injections={filteredInjections} onDelete={(id) => runAction(() => api.deleteInjection(id))} />
-        <NewTicketPanel onSave={(payload) => runAction(() => api.createInjection(payload))} />
+        <InjectionTable
+          injections={filteredInjections}
+          disabledActions={simulationIsRunning}
+          onEdit={setEditingTicket}
+          onDelete={(id) => runAction(() => api.deleteInjection(id))}
+        />
+        <NewTicketPanel
+          disabled={simulationIsRunning}
+          editingTicket={editingTicket}
+          onCancelEdit={() => setEditingTicket(null)}
+          onSave={saveSimulationTicket}
+        />
         <ActivityLog items={state.activity_log || []} />
       </div>
     </main>
