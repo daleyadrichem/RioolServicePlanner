@@ -12,7 +12,8 @@ requires-python = ">=3.10"
 dependencies = [
     "geopy",
     "sqlalchemy",
-    "python-dotenv"
+    "python-dotenv",
+    "pydantic"
 ]
 
 [dependency-groups]
