@@ -4,6 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from riool_service.database.models.base import Base
+
 from sqlalchemy import (
     DateTime,
     Enum as SqlEnum,
@@ -20,11 +22,6 @@ if TYPE_CHECKING:
     from .planning_assignment import PlanningAssignment
     from .ticket_requirement import TicketRequirement
     from .ticket_subjects import TicketSubject
-
-
-class Base(DeclarativeBase):
-    pass
-
 
 class TicketUrgency(str, Enum):
     URGENT = "URGENT"  # binnen 8 uur

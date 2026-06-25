@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from riool_service.database.models.tickets import Base
+from riool_service.database.models.base import Base
 
 if TYPE_CHECKING:
     from .requirement import Requirement
@@ -21,6 +21,25 @@ class TicketRequirement(Base):
             "requirement_id",
             name="uq_ticket_requirement",
         ),
+        UniqueConstraint(
+            "simulation_ticket_id",
+            "requirement_id",
+            name="uq_simulation_ticket_requirement",
+        ),
+        CheckConstraint(
+            """
+            (
+                ticket_id IS NOT NULL
+                AND simulation_ticket_id IS NULL
+            )
+            OR
+            (
+                ticket_id IS NULL
+                AND simulation_ticket_id IS NOT NULL
+            )
+            """,
+            name="ck_ticket_requirement_exactly_one_ticket_type",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -29,7 +48,7 @@ class TicketRequirement(Base):
 
     ticket_id: Mapped[int] = mapped_column(
         ForeignKey("tickets.id"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 
@@ -40,18 +59,17 @@ class TicketRequirement(Base):
 
     simulation_ticket_id: Mapped[int] = mapped_column(
         ForeignKey("simulation_tickets.id"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 
-    simulation_tickets: Mapped[list[SimulationTicket]] = relationship(
+    simulation_ticket: Mapped[list[SimulationTicket]] = relationship(
         "SimulationTicket",
         back_populates="ticket_requirements",
     )
 
     requirement_id: Mapped[int] = mapped_column(
         ForeignKey("requirements.id"),
-        nullable=False,
         index=True,
     )
 

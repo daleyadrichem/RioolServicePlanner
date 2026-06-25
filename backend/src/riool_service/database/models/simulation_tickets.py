@@ -62,7 +62,7 @@ class SimulationTicket(Base):
 
     ticket_requirements: Mapped[list[TicketRequirement]] = relationship(
         "TicketRequirement",
-        back_populates="simulation_tickets",
+        back_populates="simulation_ticket",
         cascade="all, delete-orphan",
     )
 

@@ -142,8 +142,8 @@
 <path d="M40,1276 H350 V1286 H40 Z" fill="#1e293b"/>
 <text x="54" y="1275" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">ticket_requirements</text>
 <text x="54" y="1308" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#0f172a">[PK] id: INTEGER</text>
-<text x="54" y="1330" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] ticket_id: INTEGER NOT NULL</text>
-<text x="54" y="1352" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] simulation_ticket_id: INTEGER NOT NULL</text>
+<text x="54" y="1330" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] ticket_id: INTEGER</text>
+<text x="54" y="1352" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] simulation_ticket_id: INTEGER</text>
 <text x="54" y="1374" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] requirement_id: INTEGER NOT NULL</text>
 <rect x="440" y="1252" width="310" height="158" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
 <rect x="440" y="1252" width="310" height="34" rx="10" fill="#1e293b"/>

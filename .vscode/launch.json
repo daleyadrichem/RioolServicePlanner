@@ -5,7 +5,7 @@
       "name": "Debug Initialize Database",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/backend/src/riool_service/database/initialize_database.py",
+      "program": "${workspaceFolder}/backend/src/riool_service/database_initializer/initialize_database.py",
       "args": [],
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/backend",

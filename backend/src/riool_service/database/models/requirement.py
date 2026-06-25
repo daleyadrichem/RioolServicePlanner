@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from riool_service.database.models.tickets import Base
+from riool_service.database.models.base import Base
 
 if TYPE_CHECKING:
     from .technician_requirement import TechnicianRequirement

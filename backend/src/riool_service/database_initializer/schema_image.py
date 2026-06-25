@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
-from riool_service.database.models.tickets import Base
+from riool_service.database.models.base import Base
 
 
 def generate_database_schema_image(

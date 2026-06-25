@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 
-from riool_service.database.models.tickets import Base
+from riool_service.database.models.base import Base
 
 # Imported so SQLAlchemy registers these tables in Base.metadata.create_all().
 from riool_service.database.models.branch import Branch as _Branch  # noqa: F401
