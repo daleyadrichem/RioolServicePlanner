@@ -316,7 +316,8 @@ def _branch_for_state(session: Session, state: SimulationState) -> Branch:
 _MANUAL_ADDRESS_PATTERN = re.compile(
     r"^\s*(?P<street>.+?)\s+"
     r"(?P<house_number>\d+[A-Za-z]?(?:[-/][0-9A-Za-z]+)?)\s*,\s*"
-    r"(?P<city>[^,]+)\s*$"
+    r"(?P<city>[^,]+)"
+    r"(?:\s*,\s*(?P<country>[^,]+))?\s*$"
 )
 
 
@@ -331,6 +332,7 @@ def _parse_manual_address(address: str) -> dict[str, str]:
 
     raw = match.groupdict()
     parsed = {key: (value or "").strip() for key, value in raw.items()}
+    parsed["country"] = parsed.get("country") or "Nederland"
     if not parsed["street"] or not parsed["house_number"] or not parsed["city"]:
         raise ValueError("Adres moet een straat, huisnummer en plaats bevatten.")
     return parsed
@@ -364,7 +366,7 @@ def validate_manual_address(payload: dict[str, Any]) -> dict[str, Any]:
         coordinates = coordinates_from_address(
             parsed["street"],
             parsed["house_number"],
-            parsed["city"],
+            f'{parsed["city"]}, {parsed["country"]}',
         )
     except Exception as exc:  # pragma: no cover - depends on external geocoder availability
         raise ValueError("Adrescontrole is mislukt. Controleer je internetverbinding of probeer het later opnieuw.") from exc

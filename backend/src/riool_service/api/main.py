@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from riool_service.database.db_utils import get_session
 from riool_service.services.simulator_service import service as simulator_service
+from riool_service.services.ticket_service import service as ticket_service
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -31,6 +32,26 @@ class SimulationTicketPayload(BaseModel):
 
     def as_service_payload(self) -> dict[str, Any]:
         return self.dict()
+
+
+class TicketPayload(BaseModel):
+    urgency: str = "medium"
+    subject: str | None = None
+    address: str | None = None
+    city: str | None = None
+    branch_id: int | None = None
+    branch_name: str | None = None
+    requires_ladder: bool = False
+    requires_spring: bool = False
+    requirements: list[str] = []
+    description: str | None = None
+    location_id: int | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    status: str | None = None
+
+    def as_service_payload(self) -> dict[str, Any]:
+        return self.dict(exclude_unset=True)
 
 
 class AddressValidationPayload(BaseModel):
@@ -66,6 +87,7 @@ app.add_middleware(
 @app.on_event("startup")
 def startup() -> None:
     simulator_service.ensure_simulator_tables()
+    ticket_service.ensure_ticket_tables()
 
 
 @app.get("/", include_in_schema=False)
@@ -81,6 +103,68 @@ def health() -> dict[str, str]:
 @app.get("/simulator/scenarios")
 def list_scenarios() -> list[dict]:
     return simulator_service.list_scenarios()
+
+
+@app.get("/branches")
+def list_branches(session: SessionDep) -> list[dict]:
+    return ticket_service.list_branches(session)
+
+
+@app.get("/tickets")
+def list_tickets(
+    session: SessionDep,
+    urgency: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+) -> list[dict]:
+    try:
+        return ticket_service.list_tickets(session, urgency=urgency, status=status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/tickets/statistics")
+def get_ticket_statistics(session: SessionDep) -> dict:
+    return ticket_service.get_statistics(session)
+
+
+@app.post("/tickets/validate-address")
+def validate_ticket_address(payload: AddressValidationPayload) -> dict:
+    try:
+        return simulator_service.validate_manual_address(payload.as_service_payload())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/tickets")
+def create_ticket(payload: TicketPayload, session: SessionDep) -> dict:
+    try:
+        result = ticket_service.create_ticket(session, payload.as_service_payload())
+        session.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/tickets/{ticket_id}")
+def update_ticket(ticket_id: int, payload: TicketPayload, session: SessionDep) -> dict:
+    try:
+        result = ticket_service.update_ticket(session, ticket_id, payload.as_service_payload())
+        session.commit()
+        return result
+    except ticket_service.TicketNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/tickets/{ticket_id}")
+def delete_ticket(ticket_id: int, session: SessionDep) -> dict:
+    try:
+        result = ticket_service.delete_ticket(session, ticket_id)
+        session.commit()
+        return result
+    except ticket_service.TicketNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/simulator/generate-tickets")

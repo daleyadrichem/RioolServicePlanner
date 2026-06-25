@@ -28,7 +28,16 @@ async function request(path, options = {}) {
 
 export const api = {
   health: () => request('/health'),
-  getTickets: () => request('/tickets'),
+  getTickets: (filters = {}) => {
+    const params = new URLSearchParams();
+    if (filters.urgency && filters.urgency !== 'all') params.set('urgency', filters.urgency);
+    if (filters.status && filters.status !== 'all') params.set('status', filters.status);
+    const query = params.toString();
+    return request(`/tickets${query ? `?${query}` : ''}`);
+  },
+  getTicketStatistics: () => request('/tickets/statistics'),
+  getBranches: () => request('/branches'),
+  validateTicketAddress: (payload) => request('/tickets/validate-address', { method: 'POST', body: JSON.stringify(payload) }),
   createTicket: (payload) => request('/tickets', { method: 'POST', body: JSON.stringify(payload) }),
   updateTicket: (id, payload) => request(`/tickets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteTicket: (id) => request(`/tickets/${encodeURIComponent(id)}`, { method: 'DELETE' }),

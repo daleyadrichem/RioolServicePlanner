@@ -299,3 +299,36 @@ body.waitingCursor,
 body.waitingCursor * {
   cursor: wait !important;
 }
+.tag.open{background:#edf5ff;color:#0f67ff;border:1px solid #b6d2ff}.tag.planned{background:#edf5ff;color:#0f67ff;border:1px solid #b6d2ff}.tag.done{background:#eaf8ee;color:#17944b;border:1px solid #bce9c7}.tag.cancelled,.tag.geannuleerd{background:#eef0f3;color:#4b5565;border:1px solid #d7dde6}.selectInput select{appearance:none;border:0;background:transparent;outline:0;color:#334568;font-weight:700;width:100%;font:inherit}.moreFilters{margin:-4px 14px 14px;display:flex;gap:16px}.moreFilters label{font-weight:800;color:#415171;font-size:12px}.moreFilters select{margin-left:10px;height:38px;border:1px solid var(--border);border-radius:8px;background:white;padding:0 10px;color:#1f2d4a;font-weight:700}
+.modalBackdrop{
+  position:fixed;
+  inset:0;
+  background:rgba(16,22,47,.42);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:40;
+  padding:28px;
+}
+.ticketModal{
+  width:min(520px, 100%);
+  max-height:calc(100vh - 56px);
+  overflow:auto;
+  position:relative;
+  grid-area:auto;
+}
+.modalClose{
+  position:absolute;
+  top:16px;
+  right:16px;
+  border:0;
+  background:transparent;
+  color:#314569;
+  cursor:pointer;
+}
+.ticketTextarea{
+  min-height:92px;
+  resize:vertical;
+  padding-top:12px;
+  font:inherit;
+}
