@@ -332,3 +332,34 @@ body.waitingCursor * {
   padding-top:12px;
   font:inherit;
 }
+.moreFilters.three{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  align-items:end;
+}
+.moreFilters.three label{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  min-width:0;
+}
+.moreFilters.three select{
+  margin-left:0;
+  width:100%;
+}
+.pageSizeSelect{
+  height:42px;
+  border:1px solid var(--border);
+  border-radius:8px;
+  background:white;
+  padding:0 10px;
+  color:#1f2d4a;
+  font-weight:700;
+}
+.btn:disabled{
+  opacity:.55;
+  cursor:not-allowed;
+}
+@media(max-width:900px){
+  .moreFilters.three{grid-template-columns:1fr;}
+}

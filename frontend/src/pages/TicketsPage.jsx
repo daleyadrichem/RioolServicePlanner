@@ -4,7 +4,6 @@ import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { ApiNotice } from '../components/ApiNotice';
 import { Button } from '../components/Button';
-import { SelectInput } from '../components/FormControls';
 import { PageHeader } from '../components/PageHeader';
 import { RequirementIcons } from '../components/Requirements';
 import { StatCard } from '../components/StatCard';
@@ -35,13 +34,18 @@ const urgencyOptions = [
 
 const ticketUrgencyOptions = urgencyOptions.filter((item) => item.value !== 'all');
 
-const statusOptions = [
+const statusFilterOptions = [
   { value: 'all', label: 'Alle statussen' },
   { value: 'open', label: 'Open' },
   { value: 'urgent_open', label: 'Urgent open' },
   { value: 'unplanned', label: 'Ongepland' },
   { value: 'finished', label: 'Afgerond' },
+  { value: 'planned', label: 'Gepland' },
+  { value: 'in_progress', label: 'Onderweg / bezig' },
+  { value: 'cancelled', label: 'Geannuleerd' },
 ];
+
+const pageSizeOptions = [12, 25, 50];
 
 const editableStatusOptions = [
   { value: 'open', label: 'Open' },
@@ -88,14 +92,49 @@ function matchesRequirement(row, requirement) {
   if (requirement === 'Geen requirements') return !row.requires_ladder && !row.requires_spring;
   return true;
 }
+function normalizeTicketStatus(status) {
+  return String(status || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+}
+
+function isTicketTerminal(row) {
+  return ['completed', 'cancelled', 'afgerond', 'geannuleerd'].includes(normalizeTicketStatus(row.status));
+}
+
+function matchesStatus(row, status) {
+  const filter = normalizeTicketStatus(status || 'all');
+  if (!filter || filter === 'all' || filter === 'alle') return true;
+  if (filter === 'open') return !isTicketTerminal(row);
+  if (filter === 'finished') return normalizeTicketStatus(row.status) === 'completed' || normalizeTicketStatus(row.status) === 'afgerond';
+  if (filter === 'urgent_open') return toUrgencyApiValue(row.urgency) === 'urgent' && !isTicketTerminal(row);
+  if (filter === 'unplanned') return !row.technician_id && !row.technician_name && !isTicketTerminal(row);
+  return normalizeTicketStatus(row.status) === filter;
+}
+
+function matchesTechnician(row, technicianId) {
+  const filter = String(technicianId || 'all');
+  if (filter === 'all') return true;
+  if (filter === 'unassigned') return !row.technician_id && !row.technician_name;
+  return String(row.technician_id || row.technician_name || '') === filter;
+}
+
+function ticketTimestamp(ticket) {
+  const value = ticket?.created_at;
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  if (String(value).includes('Vandaag')) return Date.now();
+  if (String(value).includes('Gisteren')) return Date.now() - 24 * 60 * 60 * 1000;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+}
+
 
 function isValidManualAddressFormat(address) {
   return /^\s*.+?\s+\d+[A-Za-z]?(?:[-/][0-9A-Za-z]+)?\s*,\s*[^,]+(?:\s*,\s*[^,]+)?\s*$/.test(String(address || ''));
 }
 
-function formFromTicket(ticket) {
-  if (!ticket) return { ...emptyTicketForm };
+function formFromTicket(ticket, defaultBranchId = '') {
+  if (!ticket) return { ...emptyTicketForm, branch_id: defaultBranchId };
   return {
+    branch_id: ticket.branch_id || defaultBranchId,
     subject: ticket.subject || '',
     address: ticket.address || '',
     urgency: toUrgencyApiValue(ticket.urgency || 'medium'),
@@ -106,9 +145,14 @@ function formFromTicket(ticket) {
   };
 }
 
-function TicketFilters({ filters, onChange }) {
+function TicketFilters({ filters, technicians, onChange }) {
   const [showMore, setShowMore] = useState(false);
   const setFilter = (field, value) => onChange((current) => ({ ...current, [field]: value }));
+  const technicianOptions = [
+    { value: 'all', label: 'Alle monteurs' },
+    { value: 'unassigned', label: 'Nog niet toegewezen' },
+    ...(technicians || []).map((technician) => ({ value: String(technician.id), label: technician.name })),
+  ];
 
   return (
     <section className="simFilters">
@@ -127,12 +171,11 @@ function TicketFilters({ filters, onChange }) {
           ))}
         </div>
         <div className="rightFilters">
-          <SelectInput value={filters.status} onChange={(value) => setFilter('status', value)} options={statusOptions} />
           <Button onClick={() => setShowMore((current) => !current)}><SlidersHorizontal size={18} />Meer filters</Button>
         </div>
       </div>
       {showMore && (
-        <div className="moreFilters">
+        <div className="moreFilters three">
           <label>
             Requirement
             <select value={filters.requirement} onChange={(event) => setFilter('requirement', event.target.value)}>
@@ -142,13 +185,25 @@ function TicketFilters({ filters, onChange }) {
               <option>Geen requirements</option>
             </select>
           </label>
+          <label>
+            Status
+            <select value={filters.status} onChange={(event) => setFilter('status', event.target.value)}>
+              {statusFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>
+            Monteur
+            <select value={filters.technician} onChange={(event) => setFilter('technician', event.target.value)}>
+              {technicianOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
         </div>
       )}
     </section>
   );
 }
 
-function TicketsTable({ tickets, selectedId, onSelect, onEdit }) {
+function TicketsTable({ tickets, selectedId, onSelect, onEdit, page, pageSize, totalTickets, totalPages, onPageChange, onPageSizeChange }) {
   return (
     <div className="tableCard">
       <table>
@@ -192,8 +247,15 @@ function TicketsTable({ tickets, selectedId, onSelect, onEdit }) {
       </table>
 
       <div className="pagination">
-        <span>1–{tickets.length} van {tickets.length} tickets</span>
-        <div><Button>‹</Button><Button className="activePage">1</Button><Button>›</Button><SelectInput text="12 per pagina" /></div>
+        <span>{totalTickets ? `${((page - 1) * pageSize) + 1}–${Math.min(page * pageSize, totalTickets)} van ${totalTickets} tickets` : '0 van 0 tickets'}</span>
+        <div>
+          <Button disabled={page <= 1} onClick={() => onPageChange(page - 1)}>‹</Button>
+          <Button className="activePage">{page}</Button>
+          <Button disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>›</Button>
+          <select className="pageSizeSelect" value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
+            {pageSizeOptions.map((size) => <option key={size} value={size}>{size} per pagina</option>)}
+          </select>
+        </div>
       </div>
     </div>
   );
@@ -331,14 +393,18 @@ function TicketModal({ ticket, mode, branches, onClose, onSave }) {
 }
 
 export function TicketsPage() {
-  const [filters, setFilters] = useState({ urgency: 'all', status: 'all', requirement: 'Alle requirements' });
-  const apiFilters = useMemo(() => ({ urgency: filters.urgency, status: filters.status }), [filters.urgency, filters.status]);
+  const [filters, setFilters] = useState({ urgency: 'all', status: 'all', requirement: 'Alle requirements', technician: 'all' });
+  const [pageSize, setPageSize] = useState(12);
+  const [page, setPage] = useState(1);
+  const apiFilters = useMemo(() => ({ urgency: filters.urgency }), [filters.urgency]);
   const loadTickets = useCallback(() => api.getTickets(apiFilters), [apiFilters]);
   const loadStats = useCallback(() => api.getTicketStatistics(), []);
   const loadBranches = useCallback(() => api.getBranches(), []);
+  const loadTechnicians = useCallback(() => api.getTechnicians(), []);
   const { data: tickets, loading, error, reload } = useApi(loadTickets, fallbackTickets);
   const { data: stats, reload: reloadStats } = useApi(loadStats, fallbackStats);
   const { data: branches } = useApi(loadBranches, fallbackBranches);
+  const { data: technicians } = useApi(loadTechnicians, []);
   const [selectedId, setSelectedId] = useState(ticketKey(fallbackTickets[0]));
   const [modalState, setModalState] = useState({ mode: null, ticket: null });
 
@@ -353,9 +419,28 @@ export function TicketsPage() {
   }, [refresh]);
 
   const filteredTickets = useMemo(
-    () => (tickets || []).filter((row) => matchesRequirement(row, filters.requirement)),
-    [tickets, filters.requirement],
+    () => (tickets || [])
+      .filter((row) => matchesRequirement(row, filters.requirement))
+      .filter((row) => matchesStatus(row, filters.status))
+      .filter((row) => matchesTechnician(row, filters.technician))
+      .slice()
+      .sort((a, b) => ticketTimestamp(a) - ticketTimestamp(b) || Number(apiTicketId(a) || 0) - Number(apiTicketId(b) || 0)),
+    [tickets, filters.requirement, filters.status, filters.technician],
   );
+
+  const totalPages = Math.max(1, Math.ceil(filteredTickets.length / pageSize));
+  const paginatedTickets = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredTickets.slice(start, start + pageSize);
+  }, [filteredTickets, page, pageSize]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const selected = useMemo(
     () => filteredTickets.find((ticket) => ticketKey(ticket) === selectedId) || filteredTickets[0] || tickets?.[0],
@@ -398,9 +483,20 @@ export function TicketsPage() {
         <StatCard icon={Clock} label="Ongepland" value={stats.unplanned} sub="• nog toewijzen" tone="orange" />
         <StatCard icon={CheckCircle2} label="Afgerond" value={stats.finished} sub="• status completed" tone="green" />
       </section>
-      <TicketFilters filters={filters} onChange={setFilters} />
+      <TicketFilters filters={filters} technicians={technicians} onChange={setFilters} />
       <div className="ticketsLayout">
-        <TicketsTable tickets={filteredTickets} selectedId={selected ? ticketKey(selected) : null} onSelect={setSelectedId} onEdit={openEditTicket} />
+        <TicketsTable
+          tickets={paginatedTickets}
+          selectedId={selected ? ticketKey(selected) : null}
+          onSelect={setSelectedId}
+          onEdit={openEditTicket}
+          page={page}
+          pageSize={pageSize}
+          totalTickets={filteredTickets.length}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
         <TicketDetail
           ticket={selected}
           onDelete={() => selected && runAction(() => api.deleteTicket(apiTicketId(selected)))}

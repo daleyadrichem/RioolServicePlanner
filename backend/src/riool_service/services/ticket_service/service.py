@@ -15,6 +15,7 @@ from riool_service.database.models.planning_assignment import (
 )
 from riool_service.database.models.requirement import Requirement
 from riool_service.database.models.technician import Technician
+from riool_service.database.models.technician_requirement import TechnicianRequirement
 from riool_service.database.models.ticket_requirement import TicketRequirement
 from riool_service.database.models.ticket_subjects import TicketSubject
 from riool_service.database.models.tickets import Ticket, TicketStatus, TicketUrgency
@@ -254,6 +255,35 @@ def list_branches(session: Session) -> list[dict[str, Any]]:
         }
         for branch in branches
     ]
+
+
+def list_technicians(session: Session) -> list[dict[str, Any]]:
+    technicians = session.scalars(
+        select(Technician)
+        .options(
+            joinedload(Technician.branch),
+            joinedload(Technician.technician_requirements).joinedload(TechnicianRequirement.requirement),
+        )
+        .order_by(Technician.name)
+    ).unique().all()
+    result = []
+    for technician in technicians:
+        requirement_codes = sorted(
+            link.requirement.code
+            for link in technician.technician_requirements
+            if link.requirement is not None and link.requirement.code is not None
+        )
+        result.append({
+            "id": technician.id,
+            "name": technician.name,
+            "branch_id": technician.branch_id,
+            "branch_name": technician.branch.name if technician.branch else None,
+            "status": _value(technician.status),
+            "requirements": requirement_codes,
+            "can_use_ladder": "LADDER" in {code.upper() for code in requirement_codes},
+            "can_use_spring": "VEER" in {code.upper() for code in requirement_codes},
+        })
+    return result
 
 
 def _fallback_branch(session: Session) -> Branch:

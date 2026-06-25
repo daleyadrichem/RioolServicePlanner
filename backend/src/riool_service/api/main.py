@@ -110,6 +110,11 @@ def list_branches(session: SessionDep) -> list[dict]:
     return ticket_service.list_branches(session)
 
 
+@app.get("/technicians")
+def list_technicians(session: SessionDep) -> list[dict]:
+    return ticket_service.list_technicians(session)
+
+
 @app.get("/tickets")
 def list_tickets(
     session: SessionDep,

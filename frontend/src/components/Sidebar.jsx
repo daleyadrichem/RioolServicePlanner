@@ -1,4 +1,3 @@
-import { Building2, ChevronDown } from 'lucide-react';
 import { navigationItems } from '../data/navigation';
 import { Logo } from './Logo';
 
@@ -23,25 +22,6 @@ export function Sidebar({ active, setActive }) {
         })}
       </nav>
 
-      <div className="sideFooter">
-        <div className="mini">
-          <Building2 size={22} />
-          <div>
-            <small>Vestiging</small>
-            <b>Den Bosch</b>
-          </div>
-          <ChevronDown size={16} />
-        </div>
-
-        <div className="mini">
-          <span className="avatar">PL</span>
-          <div>
-            <small>Planner</small>
-            <b>planner@rioolservice.nl</b>
-          </div>
-          <ChevronDown size={16} />
-        </div>
-      </div>
     </aside>
   );
 }
