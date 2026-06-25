@@ -301,8 +301,8 @@ def stop(session: Session, clear_remaining_injections: bool = True) -> dict[str,
 
 
 def set_speed(session: Session, speed_multiplier: int) -> dict[str, Any]:
-    if speed_multiplier not in {1, 5, 10, 20, 50, 100}:
-        raise ValueError("speed_multiplier must be one of: 1, 5, 10, 20, 50, 100")
+    if speed_multiplier not in {1, 5, 10, 20, 50, 60, 100, 120}:
+        raise ValueError("speed_multiplier must be one of: 1, 5, 10, 20, 50, 60, 100, 120")
     state = get_or_create_state(session)
     advance_state_clock(state)
     state.speed_multiplier = speed_multiplier

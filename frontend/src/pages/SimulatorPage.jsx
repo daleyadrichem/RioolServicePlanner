@@ -4,15 +4,15 @@ import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { ApiNotice } from '../components/ApiNotice';
 import { Button } from '../components/Button';
-import { UrgencyChips } from '../components/Filters';
-import { SearchBox, SelectInput } from '../components/FormControls';
+import { SelectInput } from '../components/FormControls';
 import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
 import { Tag } from '../components/Tag';
+import { toUrgencyApiValue, toUrgencyLabel } from '../utils/status';
 import { injectionRows } from '../data/simulatorData';
 
 const fallbackInjections = injectionRows.map((row) => ({
-  inject_time: row[0], id: row[1], urgency: row[2] === 'Mild' ? 'Normaal' : row[2],
+  inject_time: row[0], id: row[1], urgency: toUrgencyApiValue(row[2]),
   requires_ladder: row[3] === '✓', requires_spring: row[4] === '✓', subject: row[5], address: row[6], status: row[7],
 }));
 
@@ -22,18 +22,96 @@ const fallbackState = {
   activity_log: [{ time: '08:05', message: 'Ticket T-001 ingeschoten', actor: 'Admin' }, { time: '10:15', message: 'Ticket T-007 ingeschoten', actor: 'Admin' }],
 };
 
-function SimulatorToolbar({ scenarios, selectedScenarioId, onScenarioChange, onGenerate, onStart }) {
+function SimulatorToolbar({ scenarios, selectedScenarioId, onScenarioChange, onGenerate, state, onToggleSimulation, onStop, onSpeedChange }) {
   const scenarioOptions = scenarios.map((scenario) => ({ value: scenario.id, label: scenario.name }));
+  const speedOptions = [1, 10, 60, 120];
+  const isRunning = isSimulationRunning(state?.status);
 
   return (
     <div className="toolbar sim">
       <SelectInput value={selectedScenarioId} onChange={onScenarioChange} options={scenarioOptions} />
-      <SearchBox text="Zoeken in scenario's of tickets..." />
-      <span />
+      <span className="simStatus"><span className={`dot ${isRunning ? 'greenDot' : 'orangeDot'}`} />Status: {state?.status || 'Onbekend'}</span>
+      <div className="speed compactSpeed" aria-label="Simulatiesnelheid">
+        <b>Snelheid</b>
+        {speedOptions.map((speed) => (
+          <button
+            key={speed}
+            type="button"
+            className={speed === Number(state?.speed) ? 'selected' : ''}
+            onClick={() => onSpeedChange(speed)}
+          >
+            {speed}x
+          </button>
+        ))}
+      </div>
       <Button><FolderOpen size={20} />Scenario laden</Button>
       <Button onClick={onGenerate}><Plus size={20} />Tickets genereren</Button>
-      <Button primary onClick={onStart}><Play size={20} />Start simulatie</Button>
+      <Button onClick={onStop}><Square size={18} />Stop simulatie</Button>
+      <Button primary onClick={onToggleSimulation}>{isRunning ? <Pause size={20} /> : <Play size={20} />}{isRunning ? 'Pauze' : 'Start simulatie'}</Button>
     </div>
+  );
+}
+
+function isSimulationRunning(status) {
+  const normalized = String(status || '').toLowerCase();
+  return ['draait', 'running', 'actief', 'active', 'gestart', 'started'].some((value) => normalized.includes(value));
+}
+
+function matchesFilter(row, filters) {
+  const urgency = toUrgencyApiValue(row.urgency);
+
+  if (filters.urgency !== 'all' && urgency !== filters.urgency) return false;
+  if (filters.requirement === 'Ladder' && !row.requires_ladder) return false;
+  if (filters.requirement === 'Veer' && !row.requires_spring) return false;
+  if (filters.requirement === 'Geen requirements' && (row.requires_ladder || row.requires_spring)) return false;
+
+  return true;
+}
+
+function SimulatorFilters({ filters, onChange }) {
+  const [showMore, setShowMore] = useState(false);
+  const urgencyOptions = [
+    { value: 'all', label: 'Alle' },
+    { value: 'urgent', label: 'Urgent' },
+    { value: 'medium', label: 'Normaal' },
+    { value: 'low', label: 'Laag' },
+  ];
+
+  const setFilter = (field, value) => onChange((current) => ({ ...current, [field]: value }));
+
+  return (
+    <section className="simFilters">
+      <div className="filterRow simF">
+        <div className="chips">
+          {urgencyOptions.map((item) => (
+            <button
+              className={`chip ${filters.urgency === item.value ? 'selected' : ''} ${item.value === 'medium' ? 'normal' : item.value === 'all' ? 'alle' : item.value}`}
+              key={item.value}
+              type="button"
+              onClick={() => setFilter('urgency', item.value)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="rightFilters">
+          <Button onClick={() => setShowMore((current) => !current)}><SlidersHorizontal size={18} />Meer filters</Button>
+        </div>
+      </div>
+      {showMore && (
+        <div className="moreFilters">
+          <label>
+            Requirement
+            <select value={filters.requirement} onChange={(event) => setFilter('requirement', event.target.value)}>
+              <option>Alle requirements</option>
+              <option>Ladder</option>
+              <option>Veer</option>
+              <option>Geen requirements</option>
+            </select>
+          </label>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -50,7 +128,7 @@ function InjectionTable({ injections, onDelete }) {
             <tr key={row.id}>
               <td>{row.inject_time}</td>
               <td>{row.id}</td>
-              <td><Tag>{row.urgency}</Tag></td>
+              <td><Tag>{toUrgencyLabel(row.urgency)}</Tag></td>
               <td>{row.requires_ladder ? <span className="roundCheck">✓</span> : '–'}</td>
               <td>{row.requires_spring ? <span className="roundCheck">✓</span> : '–'}</td>
               <td>{row.subject}</td>
@@ -65,7 +143,7 @@ function InjectionTable({ injections, onDelete }) {
 }
 
 function NewTicketPanel({ onSave }) {
-  const [form, setForm] = useState({ inject_time: '12:00', urgency: 'Normaal', subject: 'Lekkage keuken', address: 'De Ruyterstraat 12, Den Bosch', city: 'Den Bosch', requires_ladder: false, requires_spring: false });
+  const [form, setForm] = useState({ inject_time: '12:00', urgency: 'medium', subject: 'Lekkage keuken', address: 'De Ruyterstraat 12, Den Bosch', city: 'Den Bosch', requires_ladder: false, requires_spring: false });
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
 
   return (
@@ -75,7 +153,7 @@ function NewTicketPanel({ onSave }) {
       <input className="fieldInput" value={form.inject_time} onChange={(event) => setField('inject_time', event.target.value)} />
       <label>Urgentie</label>
       <select className="fieldInput" value={form.urgency} onChange={(event) => setField('urgency', event.target.value)}>
-        <option>Urgent</option><option>Normaal</option><option>Laag</option>
+        <option value="urgent">Urgent</option><option value="medium">Normaal</option><option value="low">Laag</option>
       </select>
       <label>Onderwerp</label>
       <input className="fieldInput" value={form.subject} onChange={(event) => setField('subject', event.target.value)} />
@@ -87,36 +165,10 @@ function NewTicketPanel({ onSave }) {
         <label><input type="checkbox" checked={form.requires_spring} onChange={(event) => setField('requires_spring', event.target.checked)} /> Veer</label>
       </div>
       <div className="formActions">
-        <Button primary onClick={() => onSave(form)}><Save size={18} />Opslaan</Button>
-        <Button onClick={() => setForm({ inject_time: '12:00', urgency: 'Normaal', subject: '', address: '', city: 'Den Bosch', requires_ladder: false, requires_spring: false })}>Annuleren</Button>
+        <Button primary onClick={() => onSave({ ...form, urgency: toUrgencyApiValue(form.urgency) })}><Save size={18} />Opslaan</Button>
+        <Button onClick={() => setForm({ inject_time: '12:00', urgency: 'medium', subject: '', address: '', city: 'Den Bosch', requires_ladder: false, requires_spring: false })}>Annuleren</Button>
       </div>
     </aside>
-  );
-}
-
-function SimulationControls({ state, onPause, onStop, onSpeedChange }) {
-  const speedOptions = [1, 5, 10, 20];
-
-  return (
-    <section className="controls">
-      <h3>Simulatie controls</h3>
-      <p><span className="dot greenDot" /> Status: {state.status}</p>
-      <Button onClick={onPause}><Pause size={18} />Pauze</Button>
-      <Button onClick={onStop}><Square size={18} />Stop simulatie</Button>
-      <div className="speed">
-        <b>Snelheid</b>
-        {speedOptions.map((speed) => (
-          <button
-            key={speed}
-            type="button"
-            className={speed === Number(state.speed) ? 'selected' : ''}
-            onClick={() => onSpeedChange(speed)}
-          >
-            {speed}x
-          </button>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -138,6 +190,7 @@ export function SimulatorPage() {
   const { data: injections, reload: reloadInjections } = useApi(loadInjections, fallbackInjections);
   const { data: scenarios } = useApi(loadScenarios, [{ id: 'normale_dag', name: 'Normale dag' }]);
   const [selectedScenarioId, setSelectedScenarioId] = useState('normale_dag');
+  const [filters, setFilters] = useState({ urgency: 'all', requirement: 'Alle requirements' });
   const scenarioList = useMemo(() => scenarios?.length ? scenarios : [{ id: 'normale_dag', name: 'Normale dag' }], [scenarios]);
 
   const refresh = useCallback(async (options = {}) => {
@@ -151,6 +204,7 @@ export function SimulatorPage() {
     return () => window.clearInterval(intervalId);
   }, [refresh]);
 
+  const filteredInjections = useMemo(() => (injections || []).filter((row) => matchesFilter(row, filters)), [injections, filters]);
   const stats = state.stats || fallbackState.stats;
 
   return (
@@ -164,7 +218,10 @@ export function SimulatorPage() {
         selectedScenarioId={selectedScenarioId}
         onScenarioChange={setSelectedScenarioId}
         onGenerate={() => runAction(() => api.generateScenarioTickets(selectedScenarioId))}
-        onStart={() => runAction(api.startSimulation)}
+        state={state}
+        onToggleSimulation={() => runAction(isSimulationRunning(state.status) ? api.pauseSimulation : api.startSimulation)}
+        onStop={() => runAction(api.stopSimulation)}
+        onSpeedChange={(speed) => runAction(() => api.setSimulationSpeed(speed))}
       />
       <section className="stats four">
         <StatCard icon={Ticket} label="Tickets in scenario" value={stats.tickets_in_scenario} sub="incl. injecties" />
@@ -172,11 +229,10 @@ export function SimulatorPage() {
         <StatCard icon={CheckCircle2} label="Vandaag ingeschoten" value={stats.injected_today} sub={`laatste injectie ${stats.last_injection}`} tone="green" />
         <StatCard icon={Clock} label="Huidige simulatietijd" value={state.current_time} sub={`snelheid ${state.speed}x`} tone="blue" />
       </section>
-      <div className="filterRow simF"><UrgencyChips showLabel={false} /><div className="rightFilters"><SelectInput text="Alle types" /><Button><SlidersHorizontal size={18} />Meer filters</Button></div></div>
+      <SimulatorFilters filters={filters} onChange={setFilters} />
       <div className="simLayout">
-        <InjectionTable injections={injections} onDelete={(id) => runAction(() => api.deleteInjection(id))} />
+        <InjectionTable injections={filteredInjections} onDelete={(id) => runAction(() => api.deleteInjection(id))} />
         <NewTicketPanel onSave={(payload) => runAction(() => api.createInjection(payload))} />
-        <SimulationControls state={state} onPause={() => runAction(api.pauseSimulation)} onStop={() => runAction(api.stopSimulation)} onSpeedChange={(speed) => runAction(() => api.setSimulationSpeed(speed))} />
         <ActivityLog items={state.activity_log || []} />
       </div>
     </main>
