@@ -563,3 +563,39 @@ body.waitingCursor * {
     height:65vh;
   }
 }
+
+.planningDateSelector{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:14px;
+  margin:0 0 18px;
+}
+.planningDateCurrent{
+  min-height:44px;
+  min-width:210px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  padding:0 18px;
+  border:1px solid var(--border);
+  border-radius:9px;
+  background:white;
+  box-shadow:var(--shadow);
+}
+.planningDateCurrent svg{color:var(--blue);}
+.planningDateCurrent small{
+  color:#7180a0;
+  font-weight:800;
+}
+.job.pickup{
+  background:#eaf6ff;
+}
+.job.pickup b{
+  color:#0f67ff;
+}
+@media(max-width:700px){
+  .planningDateSelector{flex-wrap:wrap;}
+  .planningDateCurrent{order:-1;width:100%;}
+}

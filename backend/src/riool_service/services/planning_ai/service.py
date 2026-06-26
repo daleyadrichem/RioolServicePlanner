@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -57,7 +57,7 @@ VISIBLE_ASSIGNMENT_STATUSES = {
 }
 
 
-def get_planning_overview(session: Session, *, branch_id: int | None = None) -> dict[str, Any]:
+def get_planning_overview(session: Session, *, branch_id: int | None = None, planned_date: str | date | datetime | None = None) -> dict[str, Any]:
     """Return the current planner board built from persisted assignments.
 
     The frontend uses this to decide whether to show "Start planning" or
@@ -68,7 +68,16 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None) -> 
     branch = _overview_branch(session, branch_id)
     latest_run = _latest_completed_planning_run(session, branch.id)
     technicians = _overview_technicians(session, branch.id)
-    assignments = _overview_assignments(session, latest_run.id if latest_run else None)
+    all_assignments = _overview_assignments(session, latest_run.id if latest_run else None)
+    available_dates = _available_assignment_dates(all_assignments)
+    selected_day = _selected_planning_day(planned_date, available_dates, latest_run.planned_date if latest_run else None)
+    assignments = [
+        assignment
+        for assignment in all_assignments
+        if selected_day is None
+        or assignment.planned_start_at is None
+        or assignment.planned_start_at.date() == selected_day
+    ]
 
     assignments_by_technician: dict[int, list[PlanningAssignment]] = {}
     for assignment in assignments:
@@ -77,22 +86,28 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None) -> 
     route_lookup = _route_cache_lookup(session, technicians, assignments_by_technician)
 
     columns = []
+    selected_day_anchor = _day_anchor(selected_day, latest_run.planned_date if latest_run else None)
     for technician in technicians:
         technician_assignments = assignments_by_technician.get(technician.id, [])
+        timeline_start = _technician_day_start(technician, selected_day_anchor)
+        timeline_end = _technician_day_end(technician, selected_day_anchor)
         columns.append(
             {
                 "technician": _technician_to_overview_dict(technician),
+                "planning_date": selected_day.isoformat() if selected_day else None,
+                "timeline_start_at": timeline_start.isoformat() if timeline_start else None,
+                "timeline_end_at": timeline_end.isoformat() if timeline_end else None,
                 "items": _assignments_to_timeline_items(
                     technician,
                     technician_assignments,
-                    planned_date=latest_run.planned_date if latest_run else None,
+                    planned_date=selected_day_anchor,
+                    route_lookup=route_lookup,
                 ),
             }
         )
 
     assigned_ticket_ids = {assignment.ticket_id for assignment in assignments}
-    planned_days = {assignment.planned_start_at.date() for assignment in assignments if assignment.planned_start_at is not None}
-    horizon_days = max(1, len(planned_days))
+    horizon_days = 1
     total_open = _count_open_tickets(session, branch.id)
     urgent_open = _count_urgent_open_tickets(session, branch.id)
     total_minutes = _total_workday_minutes(technicians) * horizon_days
@@ -113,7 +128,8 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None) -> 
     return {
         "has_plan": latest_run is not None,
         "planning_run_id": latest_run.id if latest_run else None,
-        "planned_date": latest_run.planned_date.isoformat() if latest_run and latest_run.planned_date else None,
+        "planned_date": selected_day.isoformat() if selected_day else (latest_run.planned_date.isoformat() if latest_run and latest_run.planned_date else None),
+        "available_dates": [value.isoformat() for value in available_dates],
         "stats": {
             "total_today": total_open,
             "planned": len(assigned_ticket_ids),
@@ -125,6 +141,35 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None) -> 
         "columns": columns,
     }
 
+
+
+def _available_assignment_dates(assignments: list[PlanningAssignment]) -> list[date]:
+    return sorted(
+        {assignment.planned_start_at.date() for assignment in assignments if assignment.planned_start_at is not None}
+    )
+
+
+def _selected_planning_day(
+    requested: str | date | datetime | None,
+    available_dates: list[date],
+    fallback: datetime | None,
+) -> date | None:
+    if requested is not None:
+        if isinstance(requested, datetime):
+            return requested.date()
+        if isinstance(requested, date):
+            return requested
+        parsed = datetime.fromisoformat(str(requested).replace("Z", "+00:00"))
+        return parsed.date()
+    if available_dates:
+        return available_dates[0]
+    return fallback.date() if fallback is not None else None
+
+
+def _day_anchor(selected_day: date | None, fallback: datetime | None) -> datetime | None:
+    if selected_day is None:
+        return fallback
+    return datetime.combine(selected_day, time.min, tzinfo=fallback.tzinfo if fallback else None)
 
 def run_replanning(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     """Create a new plan and mark previous active assignments as moved.
@@ -499,8 +544,10 @@ def _requirement_pickup_item(
     end_at = at_time + timedelta(minutes=duration_minutes)
     return {
         "id": f"requirement-pickup-{technician_id}-{at_time.strftime('%H%M')}",
-        "title": "Pick up requirements at HQ",
+        "title": "Hulpmiddelen ophalen",
         "type": "requirement_pickup",
+        "display_variant": "requirement_pickup",
+        "address": "HQ",
         "start": at_time.strftime("%H:%M"),
         "end": end_at.strftime("%H:%M"),
         "planned_start_at": at_time.isoformat(),

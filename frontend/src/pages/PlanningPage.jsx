@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, Gauge, Loader2, MoreVertical, RotateCw, Route, Ticket, User, Waves } from 'lucide-react';
+import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, Clock, Gauge, Loader2, MoreVertical, RotateCw, Route, Ticket, User, Waves } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
@@ -15,6 +15,8 @@ const emptyPlanning = {
   has_plan: false,
   stats: { total_today: 0, planned: 0, urgent_open: 0, kilometers: 0, travel_minutes: 0, free_minutes: 0 },
   columns: [],
+  available_dates: [],
+  planned_date: null,
 };
 
 function parseDateTime(value, fallbackDate) {
@@ -63,6 +65,7 @@ function normalizeTimelineItem(rawItem, index, fallbackDate) {
   const type = String(rawItem.type || rawItem.display_variant || 'TICKET').toUpperCase();
   const isTravel = type === 'TRAVEL' || rawItem.display_variant === 'travel';
   const isBreak = type === 'BREAK' || rawItem.display_variant === 'break';
+  const isRequirementPickup = type === 'REQUIREMENT_PICKUP' || rawItem.display_variant === 'requirement_pickup';
   const start = rawItem.start || formatTime(rawItem.start_at, rawItem.planned_start_at ? formatTime(rawItem.planned_start_at) : '');
   const end = rawItem.end || formatTime(rawItem.end_at, rawItem.planned_end_at ? formatTime(rawItem.planned_end_at) : '');
   const startMinutes = minutesFromDayStart(rawItem.start_at || rawItem.planned_start_at || start, fallbackDate);
@@ -73,16 +76,16 @@ function normalizeTimelineItem(rawItem, index, fallbackDate) {
   return {
     ...rawItem,
     id: rawItem.id || `${rawItem.type || 'timeline'}-${rawItem.ticket_id || index}`,
-    title: rawItem.title || rawItem.label || rawItem.subject || (isTravel ? 'Reistijd' : isBreak ? 'Pauze' : 'Ticket'),
+    title: rawItem.title || rawItem.label || rawItem.subject || (isTravel ? 'Rijtijd' : isBreak ? 'Pauze' : isRequirementPickup ? 'Hulpmiddelen ophalen' : 'Ticket'),
     subject: rawItem.subject || rawItem.label || rawItem.title,
     start,
     end,
     start_at: rawItem.start_at || rawItem.planned_start_at || start,
     end_at: rawItem.end_at || rawItem.planned_end_at || end,
     duration_minutes: durationMinutes,
-    type: isTravel ? 'TRAVEL' : isBreak ? 'BREAK' : 'TICKET',
-    display_variant: rawItem.display_variant || (isTravel ? 'travel' : isBreak ? 'break' : 'ticket'),
-    color_hint: rawItem.color_hint || (isTravel ? 'grey' : rawItem.urgency?.toLowerCase()),
+    type: isTravel ? 'TRAVEL' : isBreak ? 'BREAK' : isRequirementPickup ? 'REQUIREMENT_PICKUP' : 'TICKET',
+    display_variant: rawItem.display_variant || (isTravel ? 'travel' : isBreak ? 'break' : isRequirementPickup ? 'requirement_pickup' : 'ticket'),
+    color_hint: rawItem.color_hint || (isTravel ? 'grey' : isRequirementPickup ? 'blue' : rawItem.urgency?.toLowerCase()),
     requires_ladder: rawItem.requires_ladder ?? (rawItem.required_skills || []).includes('LADDER'),
     requires_spring: rawItem.requires_spring ?? (rawItem.required_skills || []).includes('VEER'),
     characteristics: rawItem.characteristics || rawItem.required_skills || [],
@@ -107,6 +110,7 @@ function normalizeColumn(column) {
 function toneForItem(item) {
   if (item.type === 'TRAVEL' || item.type === 'travel') return 'travel';
   if (item.type === 'BREAK' || item.type === 'break') return 'break';
+  if (item.type === 'REQUIREMENT_PICKUP' || item.type === 'requirement_pickup') return 'pickup';
   if (item.urgency === 'URGENT' || item.urgency === 'Urgent') return 'urgent';
   if (item.urgency === 'LOW' || item.urgency === 'Laag') return 'low';
   if (item.urgency === 'MEDIUM' || item.urgency === 'Normaal') return 'normal';
@@ -134,6 +138,7 @@ function PlanningJob({ item, columnStartMinutes }) {
   const requirement = item.requires_ladder ? 'Ladder' : item.requires_spring ? 'Waves' : null;
   const isTravel = item.type === 'TRAVEL';
   const isTicket = item.type === 'TICKET';
+  const isRequirementPickup = item.type === 'REQUIREMENT_PICKUP';
 
   return (
     <div className={`job ${toneForItem(item)}`} style={itemGridStyle(item, columnStartMinutes)}>
@@ -143,10 +148,32 @@ function PlanningJob({ item, columnStartMinutes }) {
         <small>{item.start} - {item.end} · {item.duration_minutes} min</small>
         {isTravel && item.distance_km != null && <small>{Number(item.distance_km).toFixed(1)} km</small>}
         {isTicket && <small>Kenmerken: {characteristicsLabel(item)}</small>}
+        {isRequirementPickup && item.requirements?.length > 0 && <small>Hulpmiddelen: {item.requirements.join(', ')}</small>}
       </div>
-      {!isTravel && <JobRequirementIcon kind={requirement} />}
+      {isTicket && <JobRequirementIcon kind={requirement} />}
     </div>
   );
+}
+
+function formatPlanningDate(value) {
+  const parsed = parseDateTime(value);
+  if (!parsed) return 'Geen datum';
+  return parsed.toLocaleDateString('nl-NL', { weekday: 'short', day: '2-digit', month: 'short' });
+}
+
+function isoDate(value) {
+  if (!value) return null;
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const parsed = parseDateTime(value);
+  if (!parsed) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function addDays(dateString, days) {
+  const parsed = parseDateTime(dateString);
+  if (!parsed) return null;
+  parsed.setDate(parsed.getDate() + days);
+  return parsed.toISOString().slice(0, 10);
 }
 
 function TechnicianColumn({ column }) {
@@ -192,7 +219,8 @@ function TechnicianColumn({ column }) {
 }
 
 export function PlanningPage() {
-  const loadPlanning = useCallback(() => api.getPlanning(), []);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const loadPlanning = useCallback(() => api.getPlanning(selectedDate), [selectedDate]);
   const { data: planning, loading, error, reload } = useApi(loadPlanning, emptyPlanning);
   const [planningActionLoading, setPlanningActionLoading] = useState(false);
 
@@ -211,7 +239,22 @@ export function PlanningPage() {
   const stats = planning.stats || emptyPlanning.stats;
   const hasPlan = Boolean(planning.has_plan);
   const columns = useMemo(() => (planning.columns || []).map(normalizeColumn), [planning.columns]);
+  const availableDates = planning.available_dates || [];
+  const activeDate = selectedDate || isoDate(planning.planned_date) || availableDates[0] || null;
+  const activeDateIndex = availableDates.indexOf(activeDate);
+  const canGoPrevious = activeDateIndex > 0;
+  const canGoNext = activeDateIndex >= 0 && activeDateIndex < availableDates.length - 1;
   const planButtonDisabled = planningActionLoading || loading;
+
+  const selectRelativeDay = (offset) => {
+    if (activeDateIndex >= 0) {
+      const nextDate = availableDates[activeDateIndex + offset];
+      if (nextDate) setSelectedDate(nextDate);
+      return;
+    }
+    const fallback = addDays(activeDate, offset);
+    if (fallback) setSelectedDate(fallback);
+  };
 
   return (
     <main className="page">
@@ -225,6 +268,24 @@ export function PlanningPage() {
       </PageHeader>
 
       <ApiNotice loading={loading} error={error} />
+
+      {hasPlan && (
+        <section className="planningDateSelector" aria-label="Planning dag kiezen">
+          <Button disabled={!activeDate || !canGoPrevious} onClick={() => selectRelativeDay(-1)}>
+            <ChevronLeft size={18} />
+            Vorige dag
+          </Button>
+          <div className="planningDateCurrent">
+            <CalendarDays size={18} />
+            <b>{formatPlanningDate(activeDate)}</b>
+            {availableDates.length > 0 && <small>Dag {Math.max(1, activeDateIndex + 1)} van {availableDates.length}</small>}
+          </div>
+          <Button disabled={!activeDate || !canGoNext} onClick={() => selectRelativeDay(1)}>
+            Volgende dag
+            <ChevronRight size={18} />
+          </Button>
+        </section>
+      )}
 
       <section className="stats four">
         <StatCard icon={Ticket} label="Open tickets" value={stats.total_today} sub={`• ${stats.planned} toegewezen`} />

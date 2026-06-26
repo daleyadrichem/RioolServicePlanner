@@ -44,7 +44,7 @@ export const api = {
   assignTicket: (id, technicianId) => request(`/tickets/${encodeURIComponent(id)}/assign`, { method: 'POST', body: JSON.stringify({ technician_id: technicianId }) }),
   generateTickets: (count = 5) => request(`/tickets/generate?count=${count}`, { method: 'POST' }),
   getTechnicians: () => request('/technicians'),
-  getPlanning: () => request('/planning'),
+  getPlanning: (plannedDate) => request(`/planning${plannedDate ? `?planned_date=${encodeURIComponent(plannedDate)}` : ''}`),
   getMapOverview: (branchId) => request(`/map/overview${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
   autoPlan: () => request('/planning/auto-plan', { method: 'POST' }),
   replan: () => request('/planning/replan', { method: 'POST' }),

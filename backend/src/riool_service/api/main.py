@@ -221,9 +221,13 @@ def map_overview(session: SessionDep, branch_id: int | None = Query(default=None
 
 
 @app.get("/planning")
-def get_planning(session: SessionDep, branch_id: int | None = Query(default=None)) -> dict:
+def get_planning(
+    session: SessionDep,
+    branch_id: int | None = Query(default=None),
+    planned_date: str | None = Query(default=None),
+) -> dict:
     try:
-        return planning_ai_service.get_planning_overview(session, branch_id=branch_id)
+        return planning_ai_service.get_planning_overview(session, branch_id=branch_id, planned_date=planned_date)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
