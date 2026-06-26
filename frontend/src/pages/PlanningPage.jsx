@@ -10,6 +10,8 @@ import { JobRequirementIcon } from '../components/Requirements';
 import { Ladder } from '../icons/Ladder';
 import { planningColumns, technicians, timelineTimes } from '../data/planningData';
 
+const MIN_VISIBLE_TRAVEL_MINUTES = 5;
+
 const fallbackPlanning = {
   has_plan: true,
   stats: { total_today: 23, planned: 23, urgent_open: 3, kilometers: 268, travel_minutes: 375, free_minutes: 150 },
@@ -63,6 +65,11 @@ function formatTime(value, fallback = '') {
   return parsed.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
 }
 
+function durationFromTimes(startMinutes, endMinutes) {
+  if (startMinutes == null || endMinutes == null) return 0;
+  return Math.max(0, endMinutes - startMinutes);
+}
+
 function toHourTicks(column) {
   if (Array.isArray(column.hour_ticks) && column.hour_ticks.length) {
     return column.hour_ticks.map((tick) => (typeof tick === 'string' ? tick : formatTime(tick))).filter(Boolean);
@@ -84,6 +91,10 @@ function normalizeTimelineItem(rawItem, index, fallbackDate) {
   const isBreak = type === 'BREAK' || rawItem.display_variant === 'break';
   const start = rawItem.start || formatTime(rawItem.start_at, rawItem.planned_start_at ? formatTime(rawItem.planned_start_at) : '');
   const end = rawItem.end || formatTime(rawItem.end_at, rawItem.planned_end_at ? formatTime(rawItem.planned_end_at) : '');
+  const startMinutes = minutesFromDayStart(rawItem.start_at || rawItem.planned_start_at || start, fallbackDate);
+  const endMinutes = minutesFromDayStart(rawItem.end_at || rawItem.planned_end_at || end, fallbackDate);
+  const calculatedDuration = durationFromTimes(startMinutes, endMinutes);
+  const durationMinutes = rawItem.duration_minutes || rawItem.estimated_duration_minutes || calculatedDuration;
 
   return {
     ...rawItem,
@@ -94,22 +105,28 @@ function normalizeTimelineItem(rawItem, index, fallbackDate) {
     end,
     start_at: rawItem.start_at || rawItem.planned_start_at || start,
     end_at: rawItem.end_at || rawItem.planned_end_at || end,
-    duration_minutes: rawItem.duration_minutes || rawItem.estimated_duration_minutes || 0,
+    duration_minutes: durationMinutes,
     type: isTravel ? 'TRAVEL' : isBreak ? 'BREAK' : 'TICKET',
     display_variant: rawItem.display_variant || (isTravel ? 'travel' : isBreak ? 'break' : 'ticket'),
     color_hint: rawItem.color_hint || (isTravel ? 'grey' : rawItem.urgency?.toLowerCase()),
     requires_ladder: rawItem.requires_ladder ?? (rawItem.required_skills || []).includes('LADDER'),
     requires_spring: rawItem.requires_spring ?? (rawItem.required_skills || []).includes('VEER'),
     characteristics: rawItem.characteristics || rawItem.required_skills || [],
-    _startMinutes: minutesFromDayStart(rawItem.start_at || rawItem.planned_start_at || start, fallbackDate),
-    _endMinutes: minutesFromDayStart(rawItem.end_at || rawItem.planned_end_at || end, fallbackDate),
+    _startMinutes: startMinutes,
+    _endMinutes: endMinutes,
   };
+}
+
+function shouldShowTimelineItem(item) {
+  return item.type !== 'TRAVEL' || item.duration_minutes >= MIN_VISIBLE_TRAVEL_MINUTES;
 }
 
 function normalizeColumn(column) {
   const fallbackDate = column.timeline_start_at?.slice(0, 10);
   const timeline = Array.isArray(column.timeline) && column.timeline.length ? column.timeline : column.items || [];
-  const items = timeline.map((item, index) => normalizeTimelineItem(item, index, fallbackDate));
+  const items = timeline
+    .map((item, index) => normalizeTimelineItem(item, index, fallbackDate))
+    .filter(shouldShowTimelineItem);
   return { ...column, items, hour_ticks: toHourTicks(column) };
 }
 

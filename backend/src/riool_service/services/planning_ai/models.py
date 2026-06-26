@@ -25,6 +25,9 @@ class PlanningConfig:
     random_seed: int | None = 42
     refresh_route_cache: bool = False
     low_priority_max_extra_travel_minutes: int = 35
+    break_duration_minutes: int = 45
+    break_window_start_minutes: int = 11 * 60
+    break_window_end_minutes: int = 13 * 60
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,7 @@ class PlannedStop:
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "type": "ticket",
             "ticket_id": self.ticket.id,
             "location_id": self.ticket.location_id,
             "urgency": self.ticket.urgency.value,
@@ -85,6 +89,47 @@ class PlannedStop:
             "planned_end_at": self.planned_end_at.isoformat(),
             "deadline_at": self.ticket.deadline_at.isoformat(),
             "estimated_duration_minutes": self.ticket.service_minutes,
+        }
+
+
+@dataclass
+class PlannedTravel:
+    from_location_id: int
+    to_location_id: int
+    travel_minutes: int
+    distance_km: float
+    planned_start_at: datetime
+    planned_end_at: datetime
+    before_ticket_id: int | None = None
+    after_ticket_id: int | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "type": "travel",
+            "from_location_id": self.from_location_id,
+            "to_location_id": self.to_location_id,
+            "travel_minutes": self.travel_minutes,
+            "distance_km": round(self.distance_km, 3),
+            "planned_start_at": self.planned_start_at.isoformat(),
+            "planned_end_at": self.planned_end_at.isoformat(),
+            "before_ticket_id": self.before_ticket_id,
+            "after_ticket_id": self.after_ticket_id,
+        }
+
+
+@dataclass
+class PlannedBreak:
+    planned_start_at: datetime
+    planned_end_at: datetime
+    duration_minutes: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "type": "break",
+            "title": "Lunch break",
+            "planned_start_at": self.planned_start_at.isoformat(),
+            "planned_end_at": self.planned_end_at.isoformat(),
+            "duration_minutes": self.duration_minutes,
         }
 
 

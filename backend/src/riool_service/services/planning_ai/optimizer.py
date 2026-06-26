@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from itertools import combinations
 
 from riool_service.database.models.tickets import TicketUrgency
 from riool_service.services.planning_ai.models import (
     MechanicRoute,
+    PlannedBreak,
     PlannedStop,
+    PlannedTravel,
     PlanningConfig,
     PlanningSolution,
     RouteMatrix,
@@ -74,33 +76,29 @@ class InitialRouteOptimizer:
             "Multi-start randomized cheapest insertion",
             "Local search with move, swap and 2-opt reorder operators",
             "Low-priority tickets are only inserted when feasible and route-fit is good",
+            "A 45 minute break is planned for every mechanic inside the 11:00-13:00 window",
         ]
         return best
 
     def build_stops(self, solution: PlanningSolution, technician_id: int) -> list[PlannedStop]:
+        return [
+            item
+            for item in self.build_timeline(solution, technician_id, include_return_home=False)
+            if isinstance(item, PlannedStop)
+        ]
+
+    def build_timeline(
+        self,
+        solution: PlanningSolution,
+        technician_id: int,
+        *,
+        include_return_home: bool = True,
+    ) -> list[PlannedStop | PlannedTravel | PlannedBreak]:
         route = solution.routes[technician_id]
-        technician = route.technician
-        current_time = planning_day_start(self.config, technician)
-        previous_location_id = technician.start_location_id
-        stops: list[PlannedStop] = []
-        for ticket_id in route.ticket_ids:
-            ticket = self.ticket_by_id[ticket_id]
-            travel_minutes = self.matrix.duration(previous_location_id, ticket.location_id)
-            distance_km = self.matrix.distance(previous_location_id, ticket.location_id)
-            start_at = current_time + timedelta(minutes=travel_minutes)
-            end_at = start_at + timedelta(minutes=ticket.service_minutes)
-            stops.append(
-                PlannedStop(
-                    ticket=ticket,
-                    travel_minutes_before=travel_minutes,
-                    distance_km_before=distance_km,
-                    planned_start_at=start_at,
-                    planned_end_at=end_at,
-                )
-            )
-            current_time = end_at
-            previous_location_id = ticket.location_id
-        return stops
+        timeline = self._route_timeline(route, include_return_home=include_return_home)
+        if timeline is None:
+            return []
+        return timeline
 
     def _build_initial_solution(self, *, iteration: int) -> PlanningSolution:
         solution = self._empty_solution()
@@ -341,20 +339,23 @@ class InitialRouteOptimizer:
 
     def _is_solution_hard_feasible(self, solution: PlanningSolution) -> bool:
         for route in solution.routes.values():
-            current_time = planning_day_start(self.config, route.technician)
-            previous_location_id = route.technician.start_location_id
+            timeline = self._route_timeline(route, include_return_home=True)
+            if timeline is None:
+                return False
+
             non_urgent_minutes = 0
-            for ticket_id in route.ticket_ids:
-                ticket = self.ticket_by_id[ticket_id]
-                current_time += timedelta(minutes=self.matrix.duration(previous_location_id, ticket.location_id))
-                if current_time > ticket.deadline_at:
+            ticket_items = [item for item in timeline if isinstance(item, PlannedStop)]
+            for item in ticket_items:
+                if item.planned_start_at > item.ticket.deadline_at:
                     return False
-                current_time += timedelta(minutes=ticket.service_minutes)
-                if ticket.urgency != TicketUrgency.URGENT:
-                    non_urgent_minutes += ticket.service_minutes
-                previous_location_id = ticket.location_id
-            current_time += timedelta(minutes=self.matrix.duration(previous_location_id, route.technician.end_location_id))
-            if current_time > planning_day_end(self.config, route.technician):
+                if item.ticket.urgency != TicketUrgency.URGENT:
+                    non_urgent_minutes += item.ticket.service_minutes
+
+            if timeline:
+                route_end = timeline[-1].planned_end_at
+            else:
+                route_end = planning_day_start(self.config, route.technician)
+            if route_end > planning_day_end(self.config, route.technician):
                 return False
             if non_urgent_minutes > self.config.initial_non_urgent_minutes_per_technician:
                 return False
@@ -369,27 +370,30 @@ class InitialRouteOptimizer:
         planned_ticket_ids: set[int] = set()
 
         for route in solution.routes.values():
-            current_time = planning_day_start(self.config, route.technician)
-            previous_location_id = route.technician.start_location_id
-            for ticket_id in route.ticket_ids:
-                ticket = self.ticket_by_id[ticket_id]
-                travel = self.matrix.duration(previous_location_id, ticket.location_id)
-                total_travel += travel
-                total_distance += self.matrix.distance(previous_location_id, ticket.location_id)
-                current_time += timedelta(minutes=travel)
-                if current_time > ticket.deadline_at:
-                    sla_misses += 1
-                current_time += timedelta(minutes=ticket.service_minutes)
-                completed += 1
-                planned_ticket_ids.add(ticket_id)
-                previous_location_id = ticket.location_id
-            travel_home = self.matrix.duration(previous_location_id, route.technician.end_location_id)
-            total_travel += travel_home
-            total_distance += self.matrix.distance(previous_location_id, route.technician.end_location_id)
-            current_time += timedelta(minutes=travel_home)
+            timeline = self._route_timeline(route, include_return_home=True)
+            if timeline is None:
+                # This should normally be filtered by hard feasibility, but keep
+                # scoring robust for intermediate candidates.
+                overtime += 24 * 60
+                continue
+
+            for item in timeline:
+                if isinstance(item, PlannedTravel):
+                    total_travel += item.travel_minutes
+                    total_distance += item.distance_km
+                elif isinstance(item, PlannedStop):
+                    if item.planned_start_at > item.ticket.deadline_at:
+                        sla_misses += 1
+                    completed += 1
+                    planned_ticket_ids.add(item.ticket.id)
+
+            if timeline:
+                route_end = timeline[-1].planned_end_at
+            else:
+                route_end = planning_day_start(self.config, route.technician)
             day_end = planning_day_end(self.config, route.technician)
-            if current_time > day_end:
-                overtime += int((current_time - day_end).total_seconds() // 60)
+            if route_end > day_end:
+                overtime += int((route_end - day_end).total_seconds() // 60)
 
         solution.unplanned_ticket_ids = {ticket.id for ticket in self.tickets if ticket.id not in planned_ticket_ids}
         unplanned_penalty = sum(
@@ -406,6 +410,141 @@ class InitialRouteOptimizer:
             + unplanned_penalty
             + overtime * OVERTIME_PENALTY_PER_MINUTE
             + total_travel * TRAVEL_PENALTY_PER_MINUTE
+        )
+
+    def _route_timeline(
+        self,
+        route: MechanicRoute,
+        *,
+        include_return_home: bool,
+    ) -> list[PlannedStop | PlannedTravel | PlannedBreak] | None:
+        current_time = planning_day_start(self.config, route.technician)
+        previous_location_id = route.technician.start_location_id
+        previous_ticket_id: int | None = None
+        break_taken = False
+        timeline: list[PlannedStop | PlannedTravel | PlannedBreak] = []
+
+        for ticket_id in route.ticket_ids:
+            ticket = self.ticket_by_id[ticket_id]
+            if not break_taken and self._must_break_before_next_job(
+                current_time=current_time,
+                previous_location_id=previous_location_id,
+                ticket=ticket,
+            ):
+                break_item = self._planned_break_from(current_time)
+                if break_item is None:
+                    return None
+                timeline.append(break_item)
+                current_time = break_item.planned_end_at
+                break_taken = True
+
+            travel_minutes = self.matrix.duration(previous_location_id, ticket.location_id)
+            distance_km = self.matrix.distance(previous_location_id, ticket.location_id)
+            travel_start = current_time
+            travel_end = travel_start + timedelta(minutes=travel_minutes)
+            if travel_minutes > 0:
+                timeline.append(
+                    PlannedTravel(
+                        from_location_id=previous_location_id,
+                        to_location_id=ticket.location_id,
+                        travel_minutes=travel_minutes,
+                        distance_km=distance_km,
+                        planned_start_at=travel_start,
+                        planned_end_at=travel_end,
+                        before_ticket_id=ticket.id,
+                        after_ticket_id=previous_ticket_id,
+                    )
+                )
+
+            start_at = travel_end
+            end_at = start_at + timedelta(minutes=ticket.service_minutes)
+            timeline.append(
+                PlannedStop(
+                    ticket=ticket,
+                    travel_minutes_before=travel_minutes,
+                    distance_km_before=distance_km,
+                    planned_start_at=start_at,
+                    planned_end_at=end_at,
+                )
+            )
+            current_time = end_at
+            previous_location_id = ticket.location_id
+            previous_ticket_id = ticket.id
+
+        if not break_taken:
+            break_item = self._planned_break_from(current_time)
+            if break_item is None:
+                return None
+            timeline.append(break_item)
+            current_time = break_item.planned_end_at
+            break_taken = True
+
+        if include_return_home:
+            travel_minutes = self.matrix.duration(previous_location_id, route.technician.end_location_id)
+            distance_km = self.matrix.distance(previous_location_id, route.technician.end_location_id)
+            travel_start = current_time
+            travel_end = travel_start + timedelta(minutes=travel_minutes)
+            if travel_minutes > 0:
+                timeline.append(
+                    PlannedTravel(
+                        from_location_id=previous_location_id,
+                        to_location_id=route.technician.end_location_id,
+                        travel_minutes=travel_minutes,
+                        distance_km=distance_km,
+                        planned_start_at=travel_start,
+                        planned_end_at=travel_end,
+                        before_ticket_id=None,
+                        after_ticket_id=previous_ticket_id,
+                    )
+                )
+        return timeline
+
+    def _must_break_before_next_job(
+        self,
+        *,
+        current_time: datetime,
+        previous_location_id: int,
+        ticket: TicketInput,
+    ) -> bool:
+        break_start, break_end = self._break_window()
+        latest_break_start = break_end - timedelta(minutes=self.config.break_duration_minutes)
+        travel_minutes = self.matrix.duration(previous_location_id, ticket.location_id)
+        ticket_end = current_time + timedelta(minutes=travel_minutes + ticket.service_minutes)
+
+        earliest_after_ticket = max(ticket_end, break_start)
+        can_break_after_ticket = earliest_after_ticket <= latest_break_start
+        if can_break_after_ticket:
+            return False
+
+        earliest_before_ticket = max(current_time, break_start)
+        return earliest_before_ticket <= latest_break_start
+
+    def _planned_break_from(self, current_time: datetime) -> PlannedBreak | None:
+        break_start, break_end = self._break_window()
+        latest_break_start = break_end - timedelta(minutes=self.config.break_duration_minutes)
+        start_at = max(current_time, break_start)
+        if start_at > latest_break_start:
+            return None
+        return PlannedBreak(
+            planned_start_at=start_at,
+            planned_end_at=start_at + timedelta(minutes=self.config.break_duration_minutes),
+            duration_minutes=self.config.break_duration_minutes,
+        )
+
+    def _break_window(self) -> tuple[datetime, datetime]:
+        return (
+            self._datetime_at_minutes(self.config.break_window_start_minutes),
+            self._datetime_at_minutes(self.config.break_window_end_minutes),
+        )
+
+    def _datetime_at_minutes(self, minutes_after_midnight: int) -> datetime:
+        return datetime.combine(
+            self.config.planned_date.date(),
+            time.min,
+            tzinfo=self.config.planned_date.tzinfo,
+        ).replace(
+            hour=minutes_after_midnight // 60,
+            minute=minutes_after_midnight % 60,
         )
 
     def _empty_solution(self) -> PlanningSolution:
