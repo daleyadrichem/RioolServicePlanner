@@ -83,7 +83,7 @@ class TicketInput:
         return {
             TicketUrgency.URGENT: 0,
             TicketUrgency.MEDIUM: 1,
-            TicketUrgency.LOW: 2,
+            TicketUrgency.LOW: 1,
         }[self.urgency]
 
 

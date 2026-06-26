@@ -20,15 +20,18 @@ from riool_service.services.planning_ai.models import (
 )
 from riool_service.services.planning_ai.selection import planning_day_end, planning_day_start
 
-SLA_MISS_PENALTY = 1_000_000_000
+SLA_MISS_PENALTY = 100
 # A 3-day initial plan should strongly prefer getting every feasible ticket onto
-# the board. This base penalty is intentionally urgency-neutral: once SLA rules
-# are respected, leaving a low ticket unplanned is still bad because it makes the
-# next planning run harder. Urgency only adds a small tie-breaker below.
+# the board. This base penalty is intentionally urgency-neutral: leaving a
+# normal/low ticket unplanned is still bad because it makes the next planning run
+# harder. Urgency only adds a small tie-breaker below.
 UNPLANNED_TICKET_PENALTY = 1_000_000
 UNPLANNED_URGENCY_TIEBREAKER = {
     TicketUrgency.URGENT: 1_500,
-    TicketUrgency.MEDIUM: 0,
+    # Medium and low are intentionally almost equal. With the default
+    # travel_penalty_per_minute=25, this preference is only worth two minutes
+    # of extra travel, so route efficiency can easily outweigh it.
+    TicketUrgency.MEDIUM: 125,
     TicketUrgency.LOW: 0,
 }
 TICKET_COMPLETION_REWARD = UNPLANNED_TICKET_PENALTY
@@ -83,12 +86,13 @@ class InitialRouteOptimizer:
         best.algorithm_notes = [
             "Multi-start randomized cheapest insertion",
             "Local search with move, swap and 2-opt reorder operators",
-            "All feasible tickets in the 3-day horizon are inserted; urgency is only a small tie-breaker after SLA feasibility.",
+            "Medium and low tickets are treated as the same planning class; medium only receives a tiny score tie-breaker.",
             "A 45 minute break is planned for every mechanic inside the 11:00-13:00 window",
             "If a route contains tickets with requirements, a single HQ pickup is inserted before the first required ticket.",
             "Initial route workload is capped using service + travel + HQ pickup time, so urgent-ticket capacity remains free.",
+            "Deadline misses are scored softly instead of blocking otherwise efficient medium/low plans.",
             "Every minute of travel, including HQ detours and return-home travel, is penalized equally in the score.",
-            "Among plans with the same number of unplanned tickets and SLA misses, travel time dominates urgency tie-breakers.",
+            "Travel time can outweigh the small medium-over-low tie-breaker.",
         ]
         return best
 
@@ -145,13 +149,14 @@ class InitialRouteOptimizer:
 
             feasible.sort(
                 key=lambda ticket: (
-                    ticket.urgency_rank,
-                    ticket.deadline_at,
+                    self._planning_class_rank(ticket),
                     self.matrix.duration(technician.start_location_id, ticket.location_id),
+                    ticket.created_at,
+                    ticket.id,
                 )
             )
-            # Most starts choose from sensible close/deadline tickets. Some starts
-            # choose from farther tickets to let one mechanic claim a remote area.
+            # Most starts choose from sensible nearby tickets. Some starts choose
+            # from farther tickets to let one mechanic claim a remote area.
             if iteration % 4 == 0:
                 pool = sorted(
                     feasible[: min(20, len(feasible))],
@@ -172,20 +177,18 @@ class InitialRouteOptimizer:
         if iteration == 0:
             return sorted(tickets, key=self._strict_priority_key)
 
-        urgent_medium = [ticket for ticket in tickets if ticket.urgency != TicketUrgency.LOW]
-        low = [ticket for ticket in tickets if ticket.urgency == TicketUrgency.LOW]
-        urgent_medium.sort(key=self._strict_priority_key)
-        low.sort(key=self._strict_priority_key)
+        tickets.sort(key=self._strict_priority_key)
 
-        # Shuffle within priority bands. This gives different starting points
-        # without ignoring SLA pressure.
-        urgent_chunks = self._chunked(urgent_medium, size=4)
-        low_chunks = self._chunked(low, size=6)
+        # Shuffle within broad planning classes. Urgent tickets stay protected,
+        # but medium and low share the same class so medium can no longer form a
+        # separate band ahead of low work.
         randomized: list[TicketInput] = []
-        for chunk in urgent_chunks:
+        urgent = [ticket for ticket in tickets if ticket.urgency == TicketUrgency.URGENT]
+        normal = [ticket for ticket in tickets if ticket.urgency != TicketUrgency.URGENT]
+        for chunk in self._chunked(urgent, size=4):
             self.random.shuffle(chunk)
             randomized.extend(chunk)
-        for chunk in low_chunks:
+        for chunk in self._chunked(normal, size=6):
             self.random.shuffle(chunk)
             randomized.extend(chunk)
         return randomized
@@ -312,7 +315,7 @@ class InitialRouteOptimizer:
                 # skipped when it added more than ``low_priority_max_extra_travel_minutes``
                 # of travel. That made sense for opportunistic same-day filler work,
                 # but it left normal/low tickets unplanned even when day 2 or day 3
-                # still had capacity. Hard feasibility below still protects SLA,
+                # still had capacity. Hard feasibility below still protects
                 # workday, skill, lunch-break and daily non-urgent capacity rules.
                 if best is None or insertion.score_delta < best.score_delta:
                     best = insertion
@@ -396,8 +399,6 @@ class InitialRouteOptimizer:
             route_work_minutes = self._route_work_minutes(timeline)
             ticket_items = [item for item in timeline if isinstance(item, PlannedStop)]
             for item in ticket_items:
-                if item.planned_start_at > item.ticket.deadline_at:
-                    return False
                 if item.ticket.urgency != TicketUrgency.URGENT:
                     non_urgent_minutes += item.ticket.service_minutes
 
@@ -745,10 +746,12 @@ class InitialRouteOptimizer:
     def _can_do(self, technician: TechnicianInput, ticket: TicketInput) -> bool:
         return ticket.requirement_codes.issubset(technician.requirement_codes)
 
-    def _strict_priority_key(self, ticket: TicketInput) -> tuple[int, datetime, int, datetime, int]:
+    def _planning_class_rank(self, ticket: TicketInput) -> int:
+        return 0 if ticket.urgency == TicketUrgency.URGENT else 1
+
+    def _strict_priority_key(self, ticket: TicketInput) -> tuple[int, int, datetime, int]:
         return (
-            ticket.urgency_rank,
-            ticket.deadline_at,
+            self._planning_class_rank(ticket),
             -(len(ticket.requirement_codes) + len(ticket.supply_requirement_codes)),
             ticket.created_at,
             ticket.id,

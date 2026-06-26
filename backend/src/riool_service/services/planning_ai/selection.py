@@ -89,7 +89,7 @@ def load_candidate_tickets(
             Ticket.branch_id == config.branch_id,
             Ticket.status == TicketStatus.OPEN,
         )
-        .order_by(Ticket.deadline_at.asc(), Ticket.created_at.asc(), Ticket.id.asc())
+        .order_by(Ticket.created_at.asc(), Ticket.id.asc())
     )
     tickets = list(session.execute(ticket_query).unique().scalars())
 
@@ -141,12 +141,12 @@ def _datetime_at_minutes(anchor: datetime, minutes_after_midnight: int) -> datet
     )
 
 
-def _candidate_sort_key(ticket: TicketInput) -> tuple[int, datetime, int, datetime, int]:
-    # Urgent and earliest deadlines are protected first. More constrained tickets
-    # are inserted earlier so they are not boxed out by flexible work.
+def _candidate_sort_key(ticket: TicketInput) -> tuple[int, int, datetime, int]:
+    # Urgent tickets are protected first. Medium and low share the same rank;
+    # more constrained tickets are inserted earlier so they are not boxed out by
+    # flexible work. Deadlines are not used as a hidden ordering rule.
     return (
         ticket.urgency_rank,
-        ticket.deadline_at,
         -(len(ticket.requirement_codes) + len(ticket.supply_requirement_codes)),
         ticket.created_at,
         ticket.id,
