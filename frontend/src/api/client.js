@@ -45,7 +45,13 @@ export const api = {
   generateTickets: (count = 5) => request(`/tickets/generate?count=${count}`, { method: 'POST' }),
   getTechnicians: () => request('/technicians'),
   getPlanning: (plannedDate) => request(`/planning${plannedDate ? `?planned_date=${encodeURIComponent(plannedDate)}` : ''}`),
-  getMapOverview: (branchId) => request(`/map/overview${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
+  getMapOverview: (branchId, plannedDate) => {
+    const params = new URLSearchParams();
+    if (branchId) params.set('branch_id', branchId);
+    if (plannedDate) params.set('planned_date', plannedDate);
+    const query = params.toString();
+    return request(`/map/overview${query ? `?${query}` : ''}`);
+  },
   autoPlan: () => request('/planning/auto-plan', { method: 'POST' }),
   replan: () => request('/planning/replan', { method: 'POST' }),
   getSimulatorState: () => request('/simulator/state'),

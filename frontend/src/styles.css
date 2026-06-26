@@ -394,13 +394,13 @@ body.waitingCursor * {
   display:grid;
   gap:0;
   position:relative;
-  min-height:648px;
+  min-height:864px;
   padding-left:6px;
   background:repeating-linear-gradient(
     to bottom,
     transparent 0,
-    transparent 71px,
-    #e8eef7 72px
+    transparent 95px,
+    #e8eef7 96px
   );
 }
 .hourlyJobs .job{
@@ -412,10 +412,16 @@ body.waitingCursor * {
 .hourlyJobs .job.travel{
   background:#eef1f5;
   border:1px dashed #c8d1df;
+  align-items:center;
+  padding:2px 8px;
 }
 .hourlyJobs .job.travel b,
 .hourlyJobs .job.travel small{
   color:#475569;
+}
+.hourlyJobs .job.travel b{
+  line-height:1.1;
+  white-space:nowrap;
 }
 .spin{
   animation:spin .8s linear infinite;

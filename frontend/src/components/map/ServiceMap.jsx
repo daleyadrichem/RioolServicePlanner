@@ -6,6 +6,13 @@ import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip
 
 const DEFAULT_CENTER = [51.6978, 5.3037];
 const DEFAULT_ZOOM = 11;
+const ROUTE_COLORS = ['#0f67ff', '#f97316', '#16a34a', '#7c3aed', '#dc2626', '#0891b2', '#ca8a04', '#db2777'];
+
+function routeColor(route, index) {
+  const numericId = Number(route?.technician_id);
+  const paletteIndex = Number.isFinite(numericId) ? Math.abs(numericId) % ROUTE_COLORS.length : index % ROUTE_COLORS.length;
+  return ROUTE_COLORS[paletteIndex];
+}
 
 function isFiniteCoordinate(latitude, longitude) {
   return Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude));
@@ -118,15 +125,19 @@ export function ServiceMap({ data }) {
       <TileLayer attribution={attribution} url={tileUrl} />
       <BoundsController points={boundsPoints} />
 
-      {routes.map((route) => (
-        <Polyline
-          key={`route-${route.technician_id}`}
-          positions={route.coordinates || []}
-          className="serviceRouteLine"
-        >
-          <Tooltip sticky>{route.technician_name} · {route.ticket_ids?.length || 0} tickets</Tooltip>
-        </Polyline>
-      ))}
+      {routes.map((route, routeIndex) => {
+        const color = routeColor(route, routeIndex);
+        return (
+          <Polyline
+            key={`route-${route.technician_id}`}
+            positions={route.coordinates || []}
+            className="serviceRouteLine"
+            pathOptions={{ color }}
+          >
+            <Tooltip sticky>{route.technician_name} · {route.ticket_ids?.length || 0} tickets</Tooltip>
+          </Polyline>
+        );
+      })}
 
       {hq.map((item) => {
         const position = pointToLatLng(item);
@@ -158,12 +169,12 @@ export function ServiceMap({ data }) {
         );
       })}
 
-      {routes.flatMap((route) => route.stops || []).map((stop, index) => {
+      {routes.flatMap((route, routeIndex) => (route.stops || []).map((stop) => ({ stop, color: routeColor(route, routeIndex) }))).map(({ stop, color }, index) => {
         if (stop.type !== 'ticket') return null;
         const position = pointToLatLng(stop);
         if (!position) return null;
         return (
-          <CircleMarker key={`stop-${stop.assignment_id || index}`} center={position} radius={12} className="routeStopMarker">
+          <CircleMarker key={`stop-${stop.assignment_id || index}`} center={position} radius={12} className="routeStopMarker" pathOptions={{ color, fillColor: color }}>
             <Tooltip>{stop.sequence_order}. {stop.label}</Tooltip>
           </CircleMarker>
         );

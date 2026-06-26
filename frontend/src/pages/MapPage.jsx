@@ -1,5 +1,5 @@
-import { Loader2, MapPinned, RefreshCw, Route, Ticket, UserRound } from 'lucide-react';
-import { useCallback } from 'react';
+import { CalendarDays, ChevronLeft, ChevronRight, Loader2, MapPinned, RefreshCw, Route, Ticket, UserRound } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { ApiNotice } from '../components/ApiNotice';
 import { Button } from '../components/Button';
@@ -10,6 +10,26 @@ import { useApi } from '../hooks/useApi';
 
 const emptyMapOverview = { hq: [], mechanics: [], tickets: [], routes: [], meta: {} };
 
+function parseDateTime(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatPlanningDate(value) {
+  const parsed = parseDateTime(value);
+  if (!parsed) return 'Geen datum';
+  return parsed.toLocaleDateString('nl-NL', { weekday: 'short', day: '2-digit', month: 'short' });
+}
+
+function isoDate(value) {
+  if (!value) return null;
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const parsed = parseDateTime(value);
+  if (!parsed) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
 function routeGeometryLabel(value) {
   if (value === 'straight_line') return 'rechte lijnen';
   if (value === 'road_geometry') return 'wegroute';
@@ -17,9 +37,20 @@ function routeGeometryLabel(value) {
 }
 
 export function MapPage() {
-  const loadMapOverview = useCallback(() => api.getMapOverview(), []);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const loadMapOverview = useCallback(() => api.getMapOverview(null, selectedDate), [selectedDate]);
   const { data, loading, error, reload } = useApi(loadMapOverview, emptyMapOverview);
   const meta = data?.meta || {};
+  const availableDates = useMemo(() => data?.available_dates || meta.available_dates || [], [data?.available_dates, meta.available_dates]);
+  const activeDate = selectedDate || isoDate(data?.planned_date || meta.planned_date) || availableDates[0] || null;
+  const activeDateIndex = availableDates.indexOf(activeDate);
+  const canGoPrevious = activeDateIndex > 0;
+  const canGoNext = activeDateIndex >= 0 && activeDateIndex < availableDates.length - 1;
+
+  const selectRelativeDay = (offset) => {
+    const nextDate = availableDates[activeDateIndex + offset];
+    if (nextDate) setSelectedDate(nextDate);
+  };
 
   return (
     <main className="page">
@@ -40,11 +71,29 @@ export function MapPage() {
 
       <ApiNotice error={error} />
 
+      {availableDates.length > 0 && (
+        <section className="planningDateSelector" aria-label="Kaart dag kiezen">
+          <Button disabled={!activeDate || !canGoPrevious} onClick={() => selectRelativeDay(-1)}>
+            <ChevronLeft size={18} />
+            Vorige dag
+          </Button>
+          <div className="planningDateCurrent">
+            <CalendarDays size={18} />
+            <b>{formatPlanningDate(activeDate)}</b>
+            <small>Dag {Math.max(1, activeDateIndex + 1)} van {availableDates.length}</small>
+          </div>
+          <Button disabled={!activeDate || !canGoNext} onClick={() => selectRelativeDay(1)}>
+            Volgende dag
+            <ChevronRight size={18} />
+          </Button>
+        </section>
+      )}
+
       <section className="mapShell">
         <div className="mapHeader">
           <div>
             <h2>Servicegebied en planning</h2>
-            <p>HQ, ticketlocaties, monteurpositie en geplande route in één overzicht.</p>
+            <p>HQ, ticketlocaties, monteurpositie en geplande route voor de gekozen dag.</p>
           </div>
           <div className="mapLegend">
             <span><i className="legendDot hq" /> HQ</span>

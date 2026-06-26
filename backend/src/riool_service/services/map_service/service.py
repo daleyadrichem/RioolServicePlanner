@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -81,11 +82,11 @@ def _requirement_codes_from_technician(technician: Technician) -> list[str]:
     )
 
 
-def _ticket_to_map_marker(ticket: Ticket) -> dict[str, Any] | None:
+def _ticket_to_map_marker(ticket: Ticket, assignment: PlanningAssignment | None = None) -> dict[str, Any] | None:
     point = _location_to_point(ticket.location)
     if point is None:
         return None
-    active_assignment = _active_assignment(ticket)
+    active_assignment = assignment or _active_assignment(ticket)
     technician = active_assignment.technician if active_assignment is not None else None
     return {
         "id": ticket.id,
@@ -157,6 +158,42 @@ def _latest_completed_planning_run(session: Session, branch_id: int) -> Planning
     )
 
 
+def _available_assignment_dates(assignments: list[PlanningAssignment]) -> list[date]:
+    return sorted(
+        {
+            assignment.planned_start_at.date()
+            for assignment in assignments
+            if assignment.planned_start_at is not None
+        }
+    )
+
+
+def _coerce_date(value: str | date | datetime | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except ValueError as exc:
+        raise ValueError("planned_date must be an ISO date, for example 2026-06-26") from exc
+
+
+def _selected_planning_day(
+    planned_date: str | date | datetime | None,
+    available_dates: list[date],
+    default_date: date | None,
+) -> date | None:
+    requested = _coerce_date(planned_date)
+    if requested is not None:
+        return requested
+    if default_date in available_dates:
+        return default_date
+    return available_dates[0] if available_dates else default_date
+
+
 def _load_branches(session: Session, branch_id: int | None) -> list[Branch]:
     statement = select(Branch).options(joinedload(Branch.location)).order_by(Branch.id)
     if branch_id is not None:
@@ -204,13 +241,15 @@ def _load_technicians(session: Session, branch_ids: list[int]) -> list[Technicia
     )
 
 
-def _load_latest_assignments_by_branch(session: Session, branch_ids: list[int]) -> dict[int, list[PlanningAssignment]]:
+def _load_latest_assignments_by_branch(session: Session, branch_ids: list[int]) -> tuple[dict[int, list[PlanningAssignment]], dict[int, PlanningRun]]:
     assignments_by_branch: dict[int, list[PlanningAssignment]] = {}
+    runs_by_branch: dict[int, PlanningRun] = {}
     for branch_id in branch_ids:
         latest_run = _latest_completed_planning_run(session, branch_id)
         if latest_run is None:
             assignments_by_branch[branch_id] = []
             continue
+        runs_by_branch[branch_id] = latest_run
         assignments_by_branch[branch_id] = list(
             session.scalars(
                 select(PlanningAssignment)
@@ -229,7 +268,7 @@ def _load_latest_assignments_by_branch(session: Session, branch_ids: list[int]) 
             .unique()
             .all()
         )
-    return assignments_by_branch
+    return assignments_by_branch, runs_by_branch
 
 
 def _route_for_technician(
@@ -281,7 +320,7 @@ def _route_for_technician(
     }
 
 
-def get_map_overview(session: Session, *, branch_id: int | None = None) -> dict[str, Any]:
+def get_map_overview(session: Session, *, branch_id: int | None = None, planned_date: str | date | datetime | None = None) -> dict[str, Any]:
     """Return all data needed by the frontend map in one request.
 
     Route coordinates are intentionally straight-line polylines for the first UI
@@ -290,15 +329,34 @@ def get_map_overview(session: Session, *, branch_id: int | None = None) -> dict[
     """
     branches = _load_branches(session, branch_id)
     branch_ids = [branch.id for branch in branches]
-    tickets = [_ticket_to_map_marker(ticket) for ticket in _load_tickets(session, branch_ids)]
-    tickets = [ticket for ticket in tickets if ticket is not None]
     technicians = _load_technicians(session, branch_ids)
-    assignments_by_branch = _load_latest_assignments_by_branch(session, branch_ids)
+    assignments_by_branch, runs_by_branch = _load_latest_assignments_by_branch(session, branch_ids)
+    all_assignments = [assignment for assignments in assignments_by_branch.values() for assignment in assignments]
+    available_dates = _available_assignment_dates(all_assignments)
+    default_date = next((run.planned_date for run in runs_by_branch.values() if run.planned_date in available_dates), None)
+    selected_day = _selected_planning_day(planned_date, available_dates, default_date)
+    assignments_by_branch = {
+        current_branch_id: [
+            assignment
+            for assignment in assignments
+            if selected_day is None
+            or assignment.planned_start_at is None
+            or assignment.planned_start_at.date() == selected_day
+        ]
+        for current_branch_id, assignments in assignments_by_branch.items()
+    }
 
     assignments_by_technician: dict[int, list[PlanningAssignment]] = {}
     for assignments in assignments_by_branch.values():
         for assignment in assignments:
             assignments_by_technician.setdefault(assignment.technician_id, []).append(assignment)
+
+    planned_ticket_markers = []
+    for assignments in assignments_by_branch.values():
+        for assignment in assignments:
+            marker = _ticket_to_map_marker(assignment.ticket, assignment)
+            if marker is not None:
+                planned_ticket_markers.append(marker)
 
     mechanic_markers = [
         _technician_to_map_marker(technician, assignments_by_technician.get(technician.id, []))
@@ -314,13 +372,17 @@ def get_map_overview(session: Session, *, branch_id: int | None = None) -> dict[
 
     return {
         "hq": [_branch_to_hq(branch) for branch in branches if _branch_to_hq(branch) is not None],
-        "tickets": tickets,
+        "tickets": planned_ticket_markers,
         "mechanics": mechanic_markers,
         "routes": routes,
+        "planned_date": selected_day.isoformat() if selected_day else None,
+        "available_dates": [value.isoformat() for value in available_dates],
         "meta": {
             "branch_id": branch_id,
+            "planned_date": selected_day.isoformat() if selected_day else None,
+            "available_dates": [value.isoformat() for value in available_dates],
             "route_geometry": "straight_line",
-            "ticket_count": len(tickets),
+            "ticket_count": len(planned_ticket_markers),
             "mechanic_count": len(mechanic_markers),
             "route_count": len(routes),
         },

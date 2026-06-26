@@ -216,8 +216,15 @@ def delete_ticket(ticket_id: int, session: SessionDep) -> dict:
 
 
 @app.get("/map/overview")
-def map_overview(session: SessionDep, branch_id: int | None = Query(default=None)) -> dict:
-    return get_map_overview(session, branch_id=branch_id)
+def map_overview(
+    session: SessionDep,
+    branch_id: int | None = Query(default=None),
+    planned_date: str | None = Query(default=None),
+) -> dict:
+    try:
+        return get_map_overview(session, branch_id=branch_id, planned_date=planned_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/planning")

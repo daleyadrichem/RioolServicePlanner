@@ -10,6 +10,8 @@ import { JobRequirementIcon } from '../components/Requirements';
 import { Ladder } from '../icons/Ladder';
 
 const MIN_VISIBLE_TRAVEL_MINUTES = 5;
+const TIMELINE_SLOT_MINUTES = 1;
+const TIMELINE_SLOT_HEIGHT_PX = 2;
 
 const emptyPlanning = {
   has_plan: false,
@@ -128,9 +130,11 @@ function characteristicsLabel(item) {
 }
 
 function itemGridStyle(item, columnStartMinutes) {
-  if (item._startMinutes == null || item._endMinutes == null || !columnStartMinutes) return undefined;
-  const rowStart = Math.max(1, Math.round((item._startMinutes - columnStartMinutes) / 15) + 1);
-  const rowEnd = Math.max(rowStart + 1, Math.round((item._endMinutes - columnStartMinutes) / 15) + 1);
+  if (item._startMinutes == null || item._endMinutes == null || columnStartMinutes == null) return undefined;
+  const startOffset = Math.max(0, item._startMinutes - columnStartMinutes);
+  const endOffset = Math.max(startOffset + 1, item._endMinutes - columnStartMinutes);
+  const rowStart = Math.floor(startOffset / TIMELINE_SLOT_MINUTES) + 1;
+  const rowEnd = Math.max(rowStart + 1, Math.ceil(endOffset / TIMELINE_SLOT_MINUTES) + 1);
   return { gridRow: `${rowStart} / ${rowEnd}` };
 }
 
@@ -143,12 +147,17 @@ function PlanningJob({ item, columnStartMinutes }) {
   return (
     <div className={`job ${toneForItem(item)}`} style={itemGridStyle(item, columnStartMinutes)}>
       <div>
-        <b>{isTicket && item.ticket_display_id ? `${item.ticket_display_id} · ${item.title}` : item.title}</b>
-        {item.address && <strong>{item.address}</strong>}
-        <small>{item.start} - {item.end} · {item.duration_minutes} min</small>
-        {isTravel && item.distance_km != null && <small>{Number(item.distance_km).toFixed(1)} km</small>}
-        {isTicket && <small>Kenmerken: {characteristicsLabel(item)}</small>}
-        {isRequirementPickup && item.requirements?.length > 0 && <small>Hulpmiddelen: {item.requirements.join(', ')}</small>}
+        {isTravel ? (
+          <b>Rijtijd: {item.duration_minutes}min</b>
+        ) : (
+          <>
+            <b>{isTicket && item.ticket_display_id ? `${item.ticket_display_id} · ${item.title}` : item.title}</b>
+            {item.address && <strong>{item.address}</strong>}
+            <small>{item.start} - {item.end} · {item.duration_minutes} min</small>
+            {isTicket && <small>Kenmerken: {characteristicsLabel(item)}</small>}
+            {isRequirementPickup && item.requirements?.length > 0 && <small>Hulpmiddelen: {item.requirements.join(', ')}</small>}
+          </>
+        )}
       </div>
       {isTicket && <JobRequirementIcon kind={requirement} />}
     </div>
@@ -181,7 +190,7 @@ function TechnicianColumn({ column }) {
   const { technician, items, hour_ticks: hourTicks } = normalizedColumn;
   const columnStartMinutes = minutesFromDayStart(normalizedColumn.timeline_start_at) ?? minutesFromDayStart(hourTicks[0]);
   const columnEndMinutes = minutesFromDayStart(normalizedColumn.timeline_end_at) ?? minutesFromDayStart(hourTicks[hourTicks.length - 1]) ?? 17 * 60;
-  const timelineRows = Math.max(36, Math.ceil((columnEndMinutes - columnStartMinutes) / 15));
+  const timelineRows = Math.max(108, Math.ceil((columnEndMinutes - columnStartMinutes) / TIMELINE_SLOT_MINUTES));
 
   return (
     <div className="col">
@@ -195,16 +204,16 @@ function TechnicianColumn({ column }) {
       </div>
 
       <div className="timeline hourlyTimeline">
-        <div className="timeMarks hourlyTimeMarks" style={{ gridTemplateRows: `repeat(${timelineRows}, 18px)` }}>
+        <div className="timeMarks hourlyTimeMarks" style={{ gridTemplateRows: `repeat(${timelineRows}, ${TIMELINE_SLOT_HEIGHT_PX}px)` }}>
           {hourTicks.map((time) => {
             const tickMinutes = minutesFromDayStart(time);
             const gridRow = tickMinutes == null || columnStartMinutes == null
               ? undefined
-              : Math.max(1, Math.round((tickMinutes - columnStartMinutes) / 15) + 1);
+              : Math.max(1, Math.round((tickMinutes - columnStartMinutes) / TIMELINE_SLOT_MINUTES) + 1);
             return <span key={time} style={gridRow ? { gridRow } : undefined}>{time}</span>;
           })}
         </div>
-        <div className="jobs hourlyJobs" style={{ gridTemplateRows: `repeat(${timelineRows}, 18px)` }}>
+        <div className="jobs hourlyJobs" style={{ gridTemplateRows: `repeat(${timelineRows}, ${TIMELINE_SLOT_HEIGHT_PX}px)` }}>
           {items.map((item, itemIndex) => (
             <PlanningJob
               key={`${item.id || item.title}-${itemIndex}`}
