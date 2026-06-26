@@ -1,11 +1,9 @@
-import { AlertTriangle, Calendar, Clock, Gauge, MoreVertical, Plus, RotateCw, Route, Ticket, User, Waves } from 'lucide-react';
-import { useCallback } from 'react';
+import { AlertTriangle, Clock, Gauge, Loader2, MoreVertical, RotateCw, Route, Ticket, User, Waves } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { ApiNotice } from '../components/ApiNotice';
 import { Button } from '../components/Button';
-import { FilterRow } from '../components/Filters';
-import { SelectInput, SearchBox } from '../components/FormControls';
 import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
 import { JobRequirementIcon } from '../components/Requirements';
@@ -13,48 +11,160 @@ import { Ladder } from '../icons/Ladder';
 import { planningColumns, technicians, timelineTimes } from '../data/planningData';
 
 const fallbackPlanning = {
+  has_plan: true,
   stats: { total_today: 23, planned: 23, urgent_open: 3, kilometers: 268, travel_minutes: 375, free_minutes: 150 },
   columns: technicians.map((name, index) => ({
     technician: { id: `m${index + 1}`, name, can_use_ladder: true, can_use_spring: index !== 0 },
-    items: planningColumns[index].map(([title, address, time, duration, tone, requirement]) => ({
+    timeline_start_at: '2026-06-26T08:00:00',
+    timeline_end_at: '2026-06-26T17:00:00',
+    hour_ticks: timelineTimes,
+    items: planningColumns[index].map(([title, address, time, duration, tone, requirement], itemIndex) => ({
+      id: `${index}-${itemIndex}`,
+      ticket_display_id: `T-${String(index * 20 + itemIndex + 1).padStart(3, '0')}`,
       title,
+      subject: title,
       address,
       start: time?.split(' - ')[0] || '',
       end: time?.split(' - ')[1] || '',
+      start_at: time?.split(' - ')[0] || '',
+      end_at: time?.split(' - ')[1] || '',
       duration_minutes: parseInt(duration, 10) || 30,
-      urgency: tone === 'urgent' ? 'Urgent' : tone === 'low' ? 'Laag' : tone === 'normal' ? 'Normaal' : null,
-      type: tone === 'travel' ? 'travel' : tone === 'break' ? 'break' : 'ticket',
+      urgency: tone === 'urgent' ? 'URGENT' : tone === 'low' ? 'LOW' : tone === 'normal' ? 'MEDIUM' : null,
+      status: tone === 'travel' || tone === 'break' ? '' : 'PLANNED',
+      type: tone === 'travel' ? 'TRAVEL' : tone === 'break' ? 'BREAK' : 'TICKET',
+      display_variant: tone === 'travel' ? 'travel' : tone === 'break' ? 'break' : 'ticket',
+      color_hint: tone === 'travel' ? 'grey' : tone,
       requires_ladder: requirement === 'Ladder',
       requires_spring: requirement === 'Waves',
+      characteristics: [requirement].filter(Boolean),
     })),
   })),
 };
 
+function parseDateTime(value, fallbackDate) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === 'string' && /^\d{2}:\d{2}$/.test(value)) {
+    return new Date(`${fallbackDate || '1970-01-01'}T${value}:00`);
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function minutesFromDayStart(value, fallbackDate) {
+  const parsed = parseDateTime(value, fallbackDate);
+  if (!parsed) return null;
+  return parsed.getHours() * 60 + parsed.getMinutes();
+}
+
+function formatTime(value, fallback = '') {
+  const parsed = parseDateTime(value);
+  if (!parsed) return fallback;
+  return parsed.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+}
+
+function toHourTicks(column) {
+  if (Array.isArray(column.hour_ticks) && column.hour_ticks.length) {
+    return column.hour_ticks.map((tick) => (typeof tick === 'string' ? tick : formatTime(tick))).filter(Boolean);
+  }
+
+  const startMinutes = minutesFromDayStart(column.timeline_start_at) ?? 8 * 60;
+  const endMinutes = minutesFromDayStart(column.timeline_end_at) ?? 17 * 60;
+  const firstHour = Math.floor(startMinutes / 60);
+  const lastHour = Math.ceil(endMinutes / 60);
+  return Array.from({ length: Math.max(1, lastHour - firstHour + 1) }, (_, index) => {
+    const hour = firstHour + index;
+    return `${String(hour).padStart(2, '0')}:00`;
+  });
+}
+
+function normalizeTimelineItem(rawItem, index, fallbackDate) {
+  const type = String(rawItem.type || rawItem.display_variant || 'TICKET').toUpperCase();
+  const isTravel = type === 'TRAVEL' || rawItem.display_variant === 'travel';
+  const isBreak = type === 'BREAK' || rawItem.display_variant === 'break';
+  const start = rawItem.start || formatTime(rawItem.start_at, rawItem.planned_start_at ? formatTime(rawItem.planned_start_at) : '');
+  const end = rawItem.end || formatTime(rawItem.end_at, rawItem.planned_end_at ? formatTime(rawItem.planned_end_at) : '');
+
+  return {
+    ...rawItem,
+    id: rawItem.id || `${rawItem.type || 'timeline'}-${rawItem.ticket_id || index}`,
+    title: rawItem.title || rawItem.label || rawItem.subject || (isTravel ? 'Reistijd' : isBreak ? 'Pauze' : 'Ticket'),
+    subject: rawItem.subject || rawItem.label || rawItem.title,
+    start,
+    end,
+    start_at: rawItem.start_at || rawItem.planned_start_at || start,
+    end_at: rawItem.end_at || rawItem.planned_end_at || end,
+    duration_minutes: rawItem.duration_minutes || rawItem.estimated_duration_minutes || 0,
+    type: isTravel ? 'TRAVEL' : isBreak ? 'BREAK' : 'TICKET',
+    display_variant: rawItem.display_variant || (isTravel ? 'travel' : isBreak ? 'break' : 'ticket'),
+    color_hint: rawItem.color_hint || (isTravel ? 'grey' : rawItem.urgency?.toLowerCase()),
+    requires_ladder: rawItem.requires_ladder ?? (rawItem.required_skills || []).includes('LADDER'),
+    requires_spring: rawItem.requires_spring ?? (rawItem.required_skills || []).includes('VEER'),
+    characteristics: rawItem.characteristics || rawItem.required_skills || [],
+    _startMinutes: minutesFromDayStart(rawItem.start_at || rawItem.planned_start_at || start, fallbackDate),
+    _endMinutes: minutesFromDayStart(rawItem.end_at || rawItem.planned_end_at || end, fallbackDate),
+  };
+}
+
+function normalizeColumn(column) {
+  const fallbackDate = column.timeline_start_at?.slice(0, 10);
+  const timeline = Array.isArray(column.timeline) && column.timeline.length ? column.timeline : column.items || [];
+  const items = timeline.map((item, index) => normalizeTimelineItem(item, index, fallbackDate));
+  return { ...column, items, hour_ticks: toHourTicks(column) };
+}
+
 function toneForItem(item) {
-  if (item.type === 'travel') return 'travel';
-  if (item.type === 'break') return 'break';
-  if (item.urgency === 'Urgent') return 'urgent';
-  if (item.urgency === 'Laag') return 'low';
-  if (item.urgency === 'Normaal') return 'normal';
+  if (item.type === 'TRAVEL' || item.type === 'travel') return 'travel';
+  if (item.type === 'BREAK' || item.type === 'break') return 'break';
+  if (item.urgency === 'URGENT' || item.urgency === 'Urgent') return 'urgent';
+  if (item.urgency === 'LOW' || item.urgency === 'Laag') return 'low';
+  if (item.urgency === 'MEDIUM' || item.urgency === 'Normaal') return 'normal';
   return 'blue';
 }
 
-function PlanningJob({ item }) {
+function characteristicsLabel(item) {
+  const labels = [];
+  if (item.requires_ladder) labels.push('Ladder');
+  if (item.requires_spring) labels.push('Trekveer');
+  const extra = (item.characteristics || [])
+    .filter((value) => !['LADDER', 'VEER', 'Ladder', 'Waves'].includes(String(value)))
+    .map(String);
+  return [...labels, ...extra].join(', ') || 'Geen';
+}
+
+function itemGridStyle(item, columnStartMinutes) {
+  if (item._startMinutes == null || item._endMinutes == null || !columnStartMinutes) return undefined;
+  const rowStart = Math.max(1, Math.round((item._startMinutes - columnStartMinutes) / 15) + 1);
+  const rowEnd = Math.max(rowStart + 1, Math.round((item._endMinutes - columnStartMinutes) / 15) + 1);
+  return { gridRow: `${rowStart} / ${rowEnd}` };
+}
+
+function PlanningJob({ item, columnStartMinutes }) {
   const requirement = item.requires_ladder ? 'Ladder' : item.requires_spring ? 'Waves' : null;
+  const isTravel = item.type === 'TRAVEL';
+  const isTicket = item.type === 'TICKET';
+
   return (
-    <div className={`job ${toneForItem(item)}`}>
+    <div className={`job ${toneForItem(item)}`} style={itemGridStyle(item, columnStartMinutes)}>
       <div>
-        <b>{item.title}</b>
+        <b>{isTicket && item.ticket_display_id ? `${item.ticket_display_id} · ${item.title}` : item.title}</b>
         {item.address && <strong>{item.address}</strong>}
         <small>{item.start} - {item.end} · {item.duration_minutes} min</small>
+        {isTravel && item.distance_km != null && <small>{Number(item.distance_km).toFixed(1)} km</small>}
+        {isTicket && <small>Kenmerken: {characteristicsLabel(item)}</small>}
       </div>
-      <JobRequirementIcon kind={requirement} />
+      {!isTravel && <JobRequirementIcon kind={requirement} />}
     </div>
   );
 }
 
 function TechnicianColumn({ column }) {
-  const { technician, items } = column;
+  const normalizedColumn = normalizeColumn(column);
+  const { technician, items, hour_ticks: hourTicks } = normalizedColumn;
+  const columnStartMinutes = minutesFromDayStart(normalizedColumn.timeline_start_at) ?? minutesFromDayStart(hourTicks[0]);
+  const columnEndMinutes = minutesFromDayStart(normalizedColumn.timeline_end_at) ?? minutesFromDayStart(hourTicks[hourTicks.length - 1]) ?? 17 * 60;
+  const timelineRows = Math.max(36, Math.ceil((columnEndMinutes - columnStartMinutes) / 15));
+
   return (
     <div className="col">
       <div className="colHead">
@@ -66,12 +176,24 @@ function TechnicianColumn({ column }) {
         <MoreVertical size={18} />
       </div>
 
-      <div className="timeline">
-        <div className="timeMarks">
-          {timelineTimes.slice(0, 10).map((time) => <span key={time}>{time}</span>)}
+      <div className="timeline hourlyTimeline">
+        <div className="timeMarks hourlyTimeMarks" style={{ gridTemplateRows: `repeat(${timelineRows}, 18px)` }}>
+          {hourTicks.map((time) => {
+            const tickMinutes = minutesFromDayStart(time);
+            const gridRow = tickMinutes == null || columnStartMinutes == null
+              ? undefined
+              : Math.max(1, Math.round((tickMinutes - columnStartMinutes) / 15) + 1);
+            return <span key={time} style={gridRow ? { gridRow } : undefined}>{time}</span>;
+          })}
         </div>
-        <div className="jobs">
-          {items.map((item, itemIndex) => <PlanningJob key={`${item.title}-${itemIndex}`} item={item} />)}
+        <div className="jobs hourlyJobs" style={{ gridTemplateRows: `repeat(${timelineRows}, 18px)` }}>
+          {items.map((item, itemIndex) => (
+            <PlanningJob
+              key={`${item.id || item.title}-${itemIndex}`}
+              item={item}
+              columnStartMinutes={columnStartMinutes}
+            />
+          ))}
         </div>
       </div>
     </div>
@@ -81,46 +203,53 @@ function TechnicianColumn({ column }) {
 export function PlanningPage() {
   const loadPlanning = useCallback(() => api.getPlanning(), []);
   const { data: planning, loading, error, reload } = useApi(loadPlanning, fallbackPlanning);
+  const [planningActionLoading, setPlanningActionLoading] = useState(false);
 
   const runAction = async (action) => {
+    setPlanningActionLoading(true);
     try {
       await action();
       await reload();
     } catch (err) {
       alert(err.message);
+    } finally {
+      setPlanningActionLoading(false);
     }
   };
 
   const stats = planning.stats || fallbackPlanning.stats;
+  const hasPlan = Boolean(planning.has_plan);
+  const columns = useMemo(() => (planning.columns || []).map(normalizeColumn), [planning.columns]);
+  const planButtonDisabled = planningActionLoading || loading;
 
   return (
     <main className="page">
       <PageHeader title="Planning Overzicht">
         <div className="actions">
-          <Button primary onClick={() => runAction(() => api.createTicket({ subject: 'Nieuwe verstopping', address: 'Markt 1, Den Bosch', city: 'Den Bosch', urgency: 'Urgent', requires_ladder: false, requires_spring: true }))}><Plus size={20} />Nieuw ticket</Button>
-          <Button onClick={() => runAction(api.autoPlan)}><Clock size={20} />Auto-plan</Button>
-          <Button onClick={() => runAction(api.replan)}><RotateCw size={20} />Herplannen</Button>
+          <Button primary disabled={planButtonDisabled} onClick={() => runAction(hasPlan ? api.replan : api.autoPlan)}>
+            {planningActionLoading ? <Loader2 className="spin" size={20} /> : hasPlan ? <RotateCw size={20} /> : <Clock size={20} />}
+            {planningActionLoading ? 'Planning maken...' : hasPlan ? 'Herplannen' : 'Start planning'}
+          </Button>
         </div>
       </PageHeader>
 
       <ApiNotice loading={loading} error={error} />
 
-      <div className="toolbar">
-        <SelectInput icon={Calendar} text="Datum 20 mei 2025" />
-        <SearchBox text="Zoeken in tickets..." />
-      </div>
-
       <section className="stats four">
-        <StatCard icon={Ticket} label="Totaal tickets vandaag" value={stats.total_today} sub={`• ${stats.planned} gepland`} />
-        <StatCard icon={AlertTriangle} label="Urgent open" value={stats.urgent_open} sub="• tickets" tone="red" />
-        <StatCard icon={Route} label="Kilometers gepland" value={`${stats.kilometers} km`} sub={`• ± ${Math.round(stats.travel_minutes / 60)} u reistijd`} tone="green" />
-        <StatCard icon={Gauge} label="Vrije spreedruimte" value={`${Math.floor(stats.free_minutes / 60)} u ${stats.free_minutes % 60}m`} sub="• buffer voor spoed" tone="purple" />
+        <StatCard icon={Ticket} label="Open tickets" value={stats.total_today} sub={`• ${stats.planned} toegewezen`} />
+        <StatCard icon={AlertTriangle} label="Urgent open" value={stats.urgent_open} sub="• status open" tone="red" />
+        <StatCard icon={Route} label="Kilometers gepland" value={`${stats.kilometers} km`} sub={`• ± ${Math.round((stats.travel_minutes || 0) / 60)} u reistijd`} tone="green" />
+        <StatCard icon={Gauge} label="Vrije spreedruimte" value={`${Math.floor((stats.free_minutes || 0) / 60)} u ${(stats.free_minutes || 0) % 60}m`} sub="• buffer voor spoed" tone="purple" />
       </section>
 
-      <FilterRow />
+      {!hasPlan && (
+        <div className="apiNotice">
+          Er staat nog geen dagplanning in de database. Gebruik <b>Start planning</b> om de eerste planning te maken.
+        </div>
+      )}
 
       <section className="plannerGrid">
-        {planning.columns.map((column) => <TechnicianColumn key={column.technician.id} column={column} />)}
+        {columns.map((column) => <TechnicianColumn key={column.technician.id} column={column} />)}
       </section>
     </main>
   );

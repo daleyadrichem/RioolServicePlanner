@@ -1,6 +1,6 @@
 export const technicians = ['Monteur 1', 'Monteur 2', 'Monteur 3', 'Monteur 4', 'Monteur 5'];
 
-export const timelineTimes = ['08:00', '08:45', '09:30', '10:15', '11:00', '11:45', '12:30', '13:15', '14:00', '14:45', '15:30', '16:15'];
+export const timelineTimes = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
 
 export const planningColumns = [
   [

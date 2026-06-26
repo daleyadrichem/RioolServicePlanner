@@ -363,3 +363,64 @@ body.waitingCursor * {
 @media(max-width:900px){
   .moreFilters.three{grid-template-columns:1fr;}
 }
+
+.assignedTicketsTable{
+  margin-bottom:16px;
+}
+.assignedTicketsTable td:last-child{
+  min-width:110px;
+  color:#334568;
+  font-weight:700;
+}
+
+/* Planning timeline with hourly grid and travel blocks */
+.hourlyTimeline{
+  grid-template-columns:44px 1fr;
+  align-items:start;
+}
+.hourlyTimeMarks{
+  display:grid;
+  gap:0;
+  padding-top:0;
+  color:#15355f;
+}
+.hourlyTimeMarks span{
+  align-self:start;
+  font-size:11px;
+  font-weight:800;
+  line-height:1;
+}
+.hourlyJobs{
+  display:grid;
+  gap:0;
+  position:relative;
+  min-height:648px;
+  padding-left:6px;
+  background:repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 71px,
+    #e8eef7 72px
+  );
+}
+.hourlyJobs .job{
+  margin:2px 0;
+  overflow:hidden;
+  min-height:0;
+  align-self:stretch;
+}
+.hourlyJobs .job.travel{
+  background:#eef1f5;
+  border:1px dashed #c8d1df;
+}
+.hourlyJobs .job.travel b,
+.hourlyJobs .job.travel small{
+  color:#475569;
+}
+.spin{
+  animation:spin .8s linear infinite;
+}
+@keyframes spin{
+  from{transform:rotate(0deg)}
+  to{transform:rotate(360deg)}
+}

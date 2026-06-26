@@ -184,7 +184,7 @@ def _apply_status_filter(statement, status: str | None):
     if normalized == "urgent_open":
         return statement.where(
             Ticket.urgency == TicketUrgency.URGENT,
-            Ticket.status.not_in(list(TERMINAL_STATUSES)),
+            Ticket.status == TicketStatus.OPEN,
         )
     if normalized == "unplanned":
         active_assignment_exists = (

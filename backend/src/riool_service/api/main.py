@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -210,6 +210,37 @@ def delete_ticket(ticket_id: int, session: SessionDep) -> dict:
         return result
     except ticket_service.TicketNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/planning")
+def get_planning(session: SessionDep, branch_id: int | None = Query(default=None)) -> dict:
+    try:
+        return planning_ai_service.get_planning_overview(session, branch_id=branch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/planning/auto-plan")
+def auto_plan(session: SessionDep, payload: InitialPlanningPayload | None = Body(default=None)) -> dict:
+    try:
+        data = payload.as_service_payload() if payload else InitialPlanningPayload().as_service_payload()
+        result = planning_ai_service.run_initial_planning(session, data)
+        session.commit()
+        result["overview"] = planning_ai_service.get_planning_overview(session, branch_id=data.get("branch_id"))
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/planning/replan")
+def replan(session: SessionDep, payload: InitialPlanningPayload | None = Body(default=None)) -> dict:
+    try:
+        data = payload.as_service_payload() if payload else InitialPlanningPayload().as_service_payload()
+        result = planning_ai_service.run_replanning(session, data)
+        session.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/planning/initial/proposal")
