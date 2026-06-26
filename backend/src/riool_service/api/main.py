@@ -13,6 +13,7 @@ from riool_service.services.simulator_service import service as simulator_servic
 from riool_service.services.ticket_service import service as ticket_service
 from riool_service.services.routing import service as routing_service
 from riool_service.services.planning_ai import service as planning_ai_service
+from riool_service.services.map_service import get_map_overview
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -211,6 +212,11 @@ def delete_ticket(ticket_id: int, session: SessionDep) -> dict:
         return result
     except ticket_service.TicketNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/map/overview")
+def map_overview(session: SessionDep, branch_id: int | None = Query(default=None)) -> dict:
+    return get_map_overview(session, branch_id=branch_id)
 
 
 @app.get("/planning")

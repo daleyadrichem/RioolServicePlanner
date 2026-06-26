@@ -45,6 +45,7 @@ export const api = {
   generateTickets: (count = 5) => request(`/tickets/generate?count=${count}`, { method: 'POST' }),
   getTechnicians: () => request('/technicians'),
   getPlanning: () => request('/planning'),
+  getMapOverview: (branchId) => request(`/map/overview${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
   autoPlan: () => request('/planning/auto-plan', { method: 'POST' }),
   replan: () => request('/planning/replan', { method: 'POST' }),
   getSimulatorState: () => request('/simulator/state'),
