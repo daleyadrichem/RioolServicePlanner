@@ -12,6 +12,7 @@ from riool_service.database.db_utils import get_session
 from riool_service.services.simulator_service import service as simulator_service
 from riool_service.services.ticket_service import service as ticket_service
 from riool_service.services.routing import service as routing_service
+from riool_service.services.planning_ai import service as planning_ai_service
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -74,6 +75,23 @@ class RoutingTicketMatrixBetweenPayload(BaseModel):
     def as_service_payload(self) -> dict[str, Any]:
         return self.dict()
 
+
+
+class InitialPlanningPayload(BaseModel):
+    branch_id: int = 1
+    planned_date: str | None = None
+    refresh_route_cache: bool = False
+    max_candidates_per_technician: int = 10
+    initial_non_urgent_minutes_per_technician: int = 360
+    default_service_minutes: int = 60
+    multi_start_iterations: int = 40
+    local_search_iterations: int = 250
+    random_seed: int | None = 42
+    low_priority_max_extra_travel_minutes: int = 35
+
+    def as_service_payload(self) -> dict[str, Any]:
+        return self.dict(exclude_unset=True)
+
 class AddressValidationPayload(BaseModel):
     address: str
     latitude: float | None = None
@@ -109,6 +127,7 @@ def startup() -> None:
     simulator_service.ensure_simulator_tables()
     ticket_service.ensure_ticket_tables()
     routing_service.ensure_routing_tables()
+    planning_ai_service.ensure_planning_ai_tables()
 
 
 @app.get("/", include_in_schema=False)
@@ -191,6 +210,26 @@ def delete_ticket(ticket_id: int, session: SessionDep) -> dict:
         return result
     except ticket_service.TicketNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/planning/initial/proposal")
+def create_initial_planning_proposal(payload: InitialPlanningPayload, session: SessionDep) -> dict:
+    try:
+        result = planning_ai_service.create_initial_planning_proposal(session, payload.as_service_payload())
+        session.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/planning/initial/run")
+def run_initial_planning(payload: InitialPlanningPayload, session: SessionDep) -> dict:
+    try:
+        result = planning_ai_service.run_initial_planning(session, payload.as_service_payload())
+        session.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/routing/tickets/matrix")
