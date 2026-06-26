@@ -5,6 +5,7 @@ from datetime import datetime, time
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from riool_service.database.models.branch import Branch
 from riool_service.database.models.technician import Technician, TechnicianStatus
 from riool_service.database.models.technician_requirement import TechnicianRequirement
 from riool_service.database.models.ticket_requirement import TicketRequirement
@@ -22,7 +23,7 @@ def load_available_technicians(session: Session, config: PlanningConfig) -> list
             select(Technician)
             .options(
                 joinedload(Technician.home_location),
-                joinedload(Technician.branch),
+                joinedload(Technician.branch).joinedload(Branch.location),
                 joinedload(Technician.technician_requirements).joinedload(TechnicianRequirement.requirement),
             )
             .where(
@@ -57,6 +58,7 @@ def load_available_technicians(session: Session, config: PlanningConfig) -> list
                 workday_start_minutes=technician.workday_start_minutes,
                 workday_end_minutes=technician.workday_end_minutes,
                 requirement_codes=requirement_codes,
+                office_location_id=technician.branch.location_id,
             )
         )
 
@@ -70,31 +72,24 @@ def load_candidate_tickets(
     config: PlanningConfig,
     technicians: list[TechnicianInput],
 ) -> list[TicketInput]:
-    max_candidates = min(95 - len({t.start_location_id for t in technicians}), max(1, len(technicians) * config.max_candidates_per_technician))
-    if max_candidates <= 0:
-        raise PlanningSelectionError("Too many technician start locations for one OSRM planning matrix")
-
     technician_skill_sets = [technician.requirement_codes for technician in technicians]
 
-    # Broad load first, then rank in Python so we can use both SLA and planning-specific logic.
-    tickets = list(
-        session.execute(
-            select(Ticket)
-            .options(
-                joinedload(Ticket.location),
-                joinedload(Ticket.subject),
-                joinedload(Ticket.ticket_requirements).joinedload(TicketRequirement.requirement),
-            )
-            .where(
-                Ticket.branch_id == config.branch_id,
-                Ticket.status == TicketStatus.OPEN,
-            )
-            .order_by(Ticket.deadline_at.asc(), Ticket.created_at.asc(), Ticket.id.asc())
-            .limit(max_candidates * 3)
+    # Initial planning is allowed to be expensive. Load every open ticket for the
+    # branch so the route cache is warmed for all ticket-to-ticket distances.
+    ticket_query = (
+        select(Ticket)
+        .options(
+            joinedload(Ticket.location),
+            joinedload(Ticket.subject),
+            joinedload(Ticket.ticket_requirements).joinedload(TicketRequirement.requirement),
         )
-        .unique()
-        .scalars()
+        .where(
+            Ticket.branch_id == config.branch_id,
+            Ticket.status == TicketStatus.OPEN,
+        )
+        .order_by(Ticket.deadline_at.asc(), Ticket.created_at.asc(), Ticket.id.asc())
     )
+    tickets = list(session.execute(ticket_query).unique().scalars())
 
     candidates: list[TicketInput] = []
     for ticket in tickets:
@@ -120,7 +115,10 @@ def load_candidate_tickets(
         )
 
     candidates.sort(key=_candidate_sort_key)
-    return candidates[:max_candidates]
+    if config.max_candidates_per_technician and config.max_candidates_per_technician > 0:
+        max_candidates = max(1, len(technicians) * config.max_candidates_per_technician)
+        return candidates[:max_candidates]
+    return candidates
 
 
 def planning_day_start(config: PlanningConfig, technician: TechnicianInput) -> datetime:

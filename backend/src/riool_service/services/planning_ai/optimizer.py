@@ -11,6 +11,7 @@ from riool_service.services.planning_ai.models import (
     PlannedBreak,
     PlannedStop,
     PlannedTravel,
+    PlannedRequirementPickup,
     PlanningConfig,
     PlanningSolution,
     RouteMatrix,
@@ -77,6 +78,7 @@ class InitialRouteOptimizer:
             "Local search with move, swap and 2-opt reorder operators",
             "Low-priority tickets are only inserted when feasible and route-fit is good",
             "A 45 minute break is planned for every mechanic inside the 11:00-13:00 window",
+            "If a route contains tickets with requirements, a single HQ pickup is inserted before the first required ticket.",
         ]
         return best
 
@@ -93,7 +95,7 @@ class InitialRouteOptimizer:
         technician_id: int,
         *,
         include_return_home: bool = True,
-    ) -> list[PlannedStop | PlannedTravel | PlannedBreak]:
+    ) -> list[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak]:
         route = solution.routes[technician_id]
         timeline = self._route_timeline(route, include_return_home=include_return_home)
         if timeline is None:
@@ -310,22 +312,22 @@ class InitialRouteOptimizer:
         ticket: TicketInput,
         position: int,
     ) -> Insertion | None:
-        previous_location_id = self._location_before(route, position)
-        next_location_id = self._location_after(route, position)
-        old_direct = self.matrix.duration(previous_location_id, next_location_id)
-        new_to_ticket = self.matrix.duration(previous_location_id, ticket.location_id)
-        ticket_to_next = self.matrix.duration(ticket.location_id, next_location_id)
-        extra_travel = new_to_ticket + ticket_to_next - old_direct
-        extra_distance = (
-            self.matrix.distance(previous_location_id, ticket.location_id)
-            + self.matrix.distance(ticket.location_id, next_location_id)
-            - self.matrix.distance(previous_location_id, next_location_id)
-        )
+        # Evaluate the real route delta, not just the direct edge replacement.
+        # A ticket with requirements may introduce, remove, or move the one-time
+        # HQ pickup. The direct calculation below used to ignore that detour,
+        # so cheapest-insertion could prefer routes that only looked cheap before
+        # the timeline builder inserted home/previous stop -> HQ -> ticket.
+        old_travel, old_distance = self._route_travel_and_distance(route)
 
         candidate = solution.copy()
-        candidate.routes[route.technician.id].ticket_ids.insert(position, ticket.id)
+        candidate_route = candidate.routes[route.technician.id]
+        candidate_route.ticket_ids.insert(position, ticket.id)
         if not self._is_solution_hard_feasible(candidate):
             return None
+
+        new_travel, new_distance = self._route_travel_and_distance(candidate_route)
+        extra_travel = new_travel - old_travel
+        extra_distance = new_distance - old_distance
 
         priority_bonus = UNPLANNED_PENALTY_BY_URGENCY[ticket.urgency]
         score_delta = extra_travel + ticket.service_minutes - priority_bonus
@@ -335,6 +337,15 @@ class InitialRouteOptimizer:
             extra_travel_minutes=extra_travel,
             extra_distance_km=extra_distance,
             score_delta=score_delta,
+        )
+
+    def _route_travel_and_distance(self, route: MechanicRoute) -> tuple[int, float]:
+        timeline = self._route_timeline(route, include_return_home=True)
+        if timeline is None:
+            return 24 * 60, 0.0
+        return (
+            sum(item.travel_minutes for item in timeline if isinstance(item, PlannedTravel)),
+            sum(item.distance_km for item in timeline if isinstance(item, PlannedTravel)),
         )
 
     def _is_solution_hard_feasible(self, solution: PlanningSolution) -> bool:
@@ -417,15 +428,58 @@ class InitialRouteOptimizer:
         route: MechanicRoute,
         *,
         include_return_home: bool,
-    ) -> list[PlannedStop | PlannedTravel | PlannedBreak] | None:
+    ) -> list[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak] | None:
         current_time = planning_day_start(self.config, route.technician)
         previous_location_id = route.technician.start_location_id
         previous_ticket_id: int | None = None
         break_taken = False
-        timeline: list[PlannedStop | PlannedTravel | PlannedBreak] = []
+        pickup_done = False
+        route_requirement_codes = frozenset(
+            code
+            for route_ticket_id in route.ticket_ids
+            for code in self.ticket_by_id[route_ticket_id].requirement_codes
+        )
+        timeline: list[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak] = []
 
         for ticket_id in route.ticket_ids:
             ticket = self.ticket_by_id[ticket_id]
+            accumulated_travel_minutes_before_ticket = 0
+            accumulated_distance_km_before_ticket = 0.0
+
+            if ticket.requirement_codes and not pickup_done:
+                travel_minutes = self.matrix.duration(previous_location_id, route.technician.office_location_id)
+                distance_km = self.matrix.distance(previous_location_id, route.technician.office_location_id)
+                travel_start = current_time
+                travel_end = travel_start + timedelta(minutes=travel_minutes)
+                if travel_minutes > 0:
+                    timeline.append(
+                        PlannedTravel(
+                            from_location_id=previous_location_id,
+                            to_location_id=route.technician.office_location_id,
+                            travel_minutes=travel_minutes,
+                            distance_km=distance_km,
+                            planned_start_at=travel_start,
+                            planned_end_at=travel_end,
+                            before_ticket_id=ticket.id,
+                            after_ticket_id=previous_ticket_id,
+                        )
+                    )
+                accumulated_travel_minutes_before_ticket += travel_minutes
+                accumulated_distance_km_before_ticket += distance_km
+                pickup_start = travel_end
+                pickup_end = pickup_start + timedelta(minutes=self.config.requirement_pickup_duration_minutes)
+                timeline.append(
+                    PlannedRequirementPickup(
+                        location_id=route.technician.office_location_id,
+                        requirement_codes=route_requirement_codes,
+                        planned_start_at=pickup_start,
+                        planned_end_at=pickup_end,
+                        duration_minutes=self.config.requirement_pickup_duration_minutes,
+                    )
+                )
+                current_time = pickup_end
+                previous_location_id = route.technician.office_location_id
+                pickup_done = True
             if not break_taken and self._must_break_before_next_job(
                 current_time=current_time,
                 previous_location_id=previous_location_id,
@@ -440,6 +494,8 @@ class InitialRouteOptimizer:
 
             travel_minutes = self.matrix.duration(previous_location_id, ticket.location_id)
             distance_km = self.matrix.distance(previous_location_id, ticket.location_id)
+            accumulated_travel_minutes_before_ticket += travel_minutes
+            accumulated_distance_km_before_ticket += distance_km
             travel_start = current_time
             travel_end = travel_start + timedelta(minutes=travel_minutes)
             if travel_minutes > 0:
@@ -461,8 +517,8 @@ class InitialRouteOptimizer:
             timeline.append(
                 PlannedStop(
                     ticket=ticket,
-                    travel_minutes_before=travel_minutes,
-                    distance_km_before=distance_km,
+                    travel_minutes_before=accumulated_travel_minutes_before_ticket,
+                    distance_km_before=accumulated_distance_km_before_ticket,
                     planned_start_at=start_at,
                     planned_end_at=end_at,
                 )

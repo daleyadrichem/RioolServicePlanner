@@ -28,13 +28,12 @@ def get_planning_route_matrix(
         {
             *[technician.start_location_id for technician in technicians],
             *[technician.end_location_id for technician in technicians],
+            *[technician.office_location_id for technician in technicians],
             *[ticket.location_id for ticket in tickets],
         }
     )
     if len(location_ids) < 2:
         return RouteMatrix(travel_minutes={}, distance_km={})
-    if len(location_ids) > 100:
-        raise PlanningRoutingError(f"OSRM supports at most 100 unique locations per matrix; got {len(location_ids)}")
 
     locations = list(session.query(Location).filter(Location.id.in_(location_ids)).all())
     by_id = {location.id: location for location in locations}
@@ -50,7 +49,7 @@ def get_planning_route_matrix(
             raise PlanningRoutingError(f"Location {location_id} has no usable coordinates") from exc
 
     try:
-        legs = routing_service._get_or_fetch_legs(session, points, refresh_cache=refresh_cache)  # noqa: SLF001
+        legs = _get_or_fetch_complete_matrix(session, points, refresh_cache=refresh_cache)
     except Exception as exc:
         raise PlanningRoutingError(str(exc)) from exc
 
@@ -68,3 +67,35 @@ def get_planning_route_matrix(
             travel_minutes[(from_id, to_id)] = leg.travel_minutes
             distance_km[(from_id, to_id)] = leg.distance_km
     return RouteMatrix(travel_minutes=travel_minutes, distance_km=distance_km)
+
+
+def _get_or_fetch_complete_matrix(
+    session: Session,
+    points: list[RoutePoint],
+    *,
+    refresh_cache: bool,
+) -> dict[tuple[int, int], object]:
+    """Fetch/cache every directed pair, chunked around the OSRM 100-point limit.
+
+    Initial planning intentionally warms the route cache for all known tickets.
+    By batching source and destination groups we can still populate the complete
+    matrix when the branch has more than 100 unique locations.
+    """
+    if len(points) <= 100:
+        return routing_service._get_or_fetch_legs(session, points, refresh_cache=refresh_cache)  # noqa: SLF001
+
+    legs: dict[tuple[int, int], object] = {}
+    batch_size = 50
+    for source_start in range(0, len(points), batch_size):
+        source_batch = points[source_start : source_start + batch_size]
+        for destination_start in range(0, len(points), batch_size):
+            destination_batch = points[destination_start : destination_start + batch_size]
+            legs.update(
+                routing_service._get_or_fetch_legs_between(  # noqa: SLF001
+                    session,
+                    source_batch,
+                    destination_batch,
+                    refresh_cache=refresh_cache,
+                )
+            )
+    return legs

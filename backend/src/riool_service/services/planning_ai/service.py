@@ -22,6 +22,7 @@ from riool_service.database.models.tickets import Ticket, TicketStatus, TicketUr
 from riool_service.database.models.branch import Branch
 from riool_service.database.models.location import Location
 from riool_service.database.models.requirement import Requirement
+from riool_service.database.models.route_cache import RouteCache, RouteProvider
 from riool_service.database.models.technician import Technician
 from riool_service.database.models.technician_requirement import TechnicianRequirement
 from riool_service.database.models.ticket_requirement import TicketRequirement
@@ -29,6 +30,7 @@ from riool_service.services.planning_ai.models import (
     PlannedBreak,
     PlannedStop,
     PlannedTravel,
+    PlannedRequirementPickup,
     PlanningConfig,
     PlanningSolution,
 )
@@ -71,6 +73,8 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None) -> 
     for assignment in assignments:
         assignments_by_technician.setdefault(assignment.technician_id, []).append(assignment)
 
+    route_lookup = _route_cache_lookup(session, technicians, assignments_by_technician)
+
     columns = []
     for technician in technicians:
         technician_assignments = assignments_by_technician.get(technician.id, [])
@@ -92,6 +96,11 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None) -> 
     used_minutes = sum(
         int(assignment.estimated_duration_minutes or 0) + int(assignment.estimated_travel_minutes_before or 0)
         for assignment in assignments
+    )
+    used_minutes += 5 * sum(
+        1
+        for technician_assignments in assignments_by_technician.values()
+        if any(_requirement_codes_from_ticket(assignment.ticket) for assignment in technician_assignments)
     )
     if latest_run is not None:
         used_minutes += len(technicians) * 45
@@ -184,6 +193,51 @@ def _overview_assignments(session: Session, planning_run_id: int | None) -> list
     )
 
 
+def _route_cache_lookup(
+    session: Session,
+    technicians: list[Technician],
+    assignments_by_technician: dict[int, list[PlanningAssignment]],
+) -> dict[tuple[int, int], tuple[int, float]]:
+    pairs: set[tuple[int, int]] = set()
+    for technician in technicians:
+        assignments = assignments_by_technician.get(technician.id, [])
+        previous_location_id = (
+            technician.start_location.id if technician.start_location is not None else None
+        )
+        hq_location_id = technician.branch.location_id if technician.branch else None
+        for assignment in assignments:
+            ticket_location_id = assignment.ticket.location_id
+            requirement_codes = _requirement_codes_from_ticket(assignment.ticket)
+            if (
+                requirement_codes
+                and previous_location_id is not None
+                and hq_location_id is not None
+                and ticket_location_id is not None
+            ):
+                pairs.add((previous_location_id, hq_location_id))
+                pairs.add((hq_location_id, ticket_location_id))
+            previous_location_id = ticket_location_id
+
+    if not pairs:
+        return {}
+
+    rows = session.scalars(
+        select(RouteCache).where(
+            RouteCache.provider == RouteProvider.OSRM,
+            RouteCache.from_location_id.in_({pair[0] for pair in pairs}),
+            RouteCache.to_location_id.in_({pair[1] for pair in pairs}),
+        )
+    ).all()
+    lookup = {
+        (row.from_location_id, row.to_location_id): (
+            int(row.travel_minutes),
+            float(row.distance_km),
+        )
+        for row in rows
+    }
+    return {pair: lookup[pair] for pair in pairs if pair in lookup}
+
+
 def _format_location_address(location: Location | None) -> str:
     if location is None:
         return ""
@@ -258,13 +312,96 @@ def _assignments_to_timeline_items(
     assignments: list[PlanningAssignment],
     *,
     planned_date: datetime | None,
+    route_lookup: dict[tuple[int, int], tuple[int, float]] | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     break_inserted = False
+    pickup_inserted = False
+    route_requirement_codes = sorted({code for assignment in assignments for code in _requirement_codes_from_ticket(assignment.ticket)})
     previous_end = _technician_day_start(technician, planned_date)
+    previous_location_id = (
+        technician.start_location.id if technician.start_location is not None else None
+    )
 
     for assignment in assignments:
         travel_minutes = int(assignment.estimated_travel_minutes_before or 0)
+        assignment_requirement_codes = _requirement_codes_from_ticket(assignment.ticket)
+        split_required_pickup = (
+            bool(assignment_requirement_codes)
+            and not pickup_inserted
+            and planned_date is not None
+            and previous_location_id is not None
+            and technician.branch is not None
+            and technician.branch.location_id is not None
+            and assignment.ticket.location_id is not None
+        )
+
+        if split_required_pickup:
+            hq_location_id = technician.branch.location_id
+            to_hq = (route_lookup or {}).get((previous_location_id, hq_location_id))
+            hq_to_ticket = (route_lookup or {}).get((hq_location_id, assignment.ticket.location_id))
+            pickup_duration = 5
+            if to_hq is not None and hq_to_ticket is not None:
+                to_hq_minutes, to_hq_distance = to_hq
+                hq_to_ticket_minutes, hq_to_ticket_distance = hq_to_ticket
+                travel_start = assignment.planned_start_at - timedelta(
+                    minutes=to_hq_minutes + pickup_duration + hq_to_ticket_minutes
+                )
+
+                if not break_inserted:
+                    break_item = _break_item_between(
+                        technician.id,
+                        previous_end,
+                        travel_start,
+                        planned_date=planned_date,
+                    )
+                    if break_item is not None:
+                        items.append(break_item)
+                        break_inserted = True
+
+                if to_hq_minutes > 0:
+                    items.append(
+                        _travel_item(
+                            f"travel-{assignment.id}-to-hq",
+                            travel_start,
+                            travel_start + timedelta(minutes=to_hq_minutes),
+                            to_hq_minutes,
+                            to_hq_distance,
+                            before_ticket_id=assignment.ticket_id,
+                            from_location_id=previous_location_id,
+                            to_location_id=hq_location_id,
+                        )
+                    )
+                pickup_start = travel_start + timedelta(minutes=to_hq_minutes)
+                items.append(
+                    _requirement_pickup_item(
+                        technician.id,
+                        hq_location_id,
+                        route_requirement_codes,
+                        pickup_start,
+                        duration_minutes=pickup_duration,
+                    )
+                )
+                pickup_inserted = True
+                hq_departure = pickup_start + timedelta(minutes=pickup_duration)
+                if hq_to_ticket_minutes > 0:
+                    items.append(
+                        _travel_item(
+                            f"travel-{assignment.id}-hq-to-ticket",
+                            hq_departure,
+                            assignment.planned_start_at,
+                            hq_to_ticket_minutes,
+                            hq_to_ticket_distance,
+                            before_ticket_id=assignment.ticket_id,
+                            from_location_id=hq_location_id,
+                            to_location_id=assignment.ticket.location_id,
+                        )
+                    )
+                items.append(_assignment_to_planning_item(assignment))
+                previous_end = assignment.planned_end_at
+                previous_location_id = assignment.ticket.location_id
+                continue
+
         travel_start = assignment.planned_start_at - timedelta(minutes=travel_minutes)
 
         if not break_inserted:
@@ -278,11 +415,23 @@ def _assignments_to_timeline_items(
                 items.append(break_item)
                 break_inserted = True
 
+        if assignment_requirement_codes and not pickup_inserted and planned_date is not None:
+            items.append(
+                _requirement_pickup_item(
+                    technician.id,
+                    technician.branch.location_id if technician.branch else None,
+                    route_requirement_codes,
+                    travel_start,
+                )
+            )
+            pickup_inserted = True
+
         if travel_minutes > 0:
             items.append(_travel_item_before_assignment(assignment, travel_start))
 
         items.append(_assignment_to_planning_item(assignment))
         previous_end = assignment.planned_end_at
+        previous_location_id = assignment.ticket.location_id
 
     if not break_inserted:
         route_end = _technician_day_end(technician, planned_date)
@@ -303,25 +452,72 @@ def _assignments_to_timeline_items(
     return sorted(items, key=lambda item: item.get("planned_start_at") or "")
 
 
+def _requirement_pickup_item(
+    technician_id: int,
+    location_id: int | None,
+    requirement_codes: list[str],
+    at_time: datetime,
+    duration_minutes: int = 5,
+) -> dict[str, Any]:
+    end_at = at_time + timedelta(minutes=duration_minutes)
+    return {
+        "id": f"requirement-pickup-{technician_id}-{at_time.strftime('%H%M')}",
+        "title": "Pick up requirements at HQ",
+        "type": "requirement_pickup",
+        "start": at_time.strftime("%H:%M"),
+        "end": end_at.strftime("%H:%M"),
+        "planned_start_at": at_time.isoformat(),
+        "planned_end_at": end_at.isoformat(),
+        "duration_minutes": duration_minutes,
+        "location_id": location_id,
+        "requirements": requirement_codes,
+    }
+
+
 def _travel_item_before_assignment(
     assignment: PlanningAssignment,
     travel_start: datetime,
 ) -> dict[str, Any]:
     travel_minutes = int(assignment.estimated_travel_minutes_before or 0)
-    travel_end = assignment.planned_start_at
-    return {
-        "id": f"travel-{assignment.id}",
+    return _travel_item(
+        f"travel-{assignment.id}",
+        travel_start,
+        assignment.planned_start_at,
+        travel_minutes,
+        float(assignment.estimated_distance_km_before or 0),
+        before_ticket_id=assignment.ticket_id,
+    )
+
+
+def _travel_item(
+    item_id: str,
+    start_at: datetime,
+    end_at: datetime,
+    travel_minutes: int,
+    distance_km: float,
+    *,
+    before_ticket_id: int | None = None,
+    from_location_id: int | None = None,
+    to_location_id: int | None = None,
+) -> dict[str, Any]:
+    item = {
+        "id": item_id,
         "title": "Rijtijd",
         "type": "travel",
-        "start": travel_start.strftime("%H:%M"),
-        "end": travel_end.strftime("%H:%M"),
-        "planned_start_at": travel_start.isoformat(),
-        "planned_end_at": travel_end.isoformat(),
+        "start": start_at.strftime("%H:%M"),
+        "end": end_at.strftime("%H:%M"),
+        "planned_start_at": start_at.isoformat(),
+        "planned_end_at": end_at.isoformat(),
         "duration_minutes": travel_minutes,
         "travel_minutes": travel_minutes,
-        "distance_km": round(float(assignment.estimated_distance_km_before or 0), 1),
-        "before_ticket_id": assignment.ticket_id,
+        "distance_km": round(float(distance_km or 0), 1),
+        "before_ticket_id": before_ticket_id,
     }
+    if from_location_id is not None:
+        item["from_location_id"] = from_location_id
+    if to_location_id is not None:
+        item["to_location_id"] = to_location_id
+    return item
 
 
 def _break_item_between(
@@ -528,7 +724,7 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
     return PlanningConfig(
         branch_id=branch_id,
         planned_date=planned_date,
-        max_candidates_per_technician=int(payload.get("max_candidates_per_technician") or 10),
+        max_candidates_per_technician=int(payload.get("max_candidates_per_technician") or 0),
         initial_non_urgent_minutes_per_technician=int(payload.get("initial_non_urgent_minutes_per_technician") or 360),
         default_service_minutes=int(payload.get("default_service_minutes") or 60),
         multi_start_iterations=int(payload.get("multi_start_iterations") or 40),
@@ -539,6 +735,7 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
         break_duration_minutes=int(payload.get("break_duration_minutes") or 45),
         break_window_start_minutes=int(payload.get("break_window_start_minutes") or 11 * 60),
         break_window_end_minutes=int(payload.get("break_window_end_minutes") or 13 * 60),
+        requirement_pickup_duration_minutes=int(payload.get("requirement_pickup_duration_minutes") or 5),
     )
 
 
@@ -604,6 +801,7 @@ def _solution_as_dict(
             "Each start plan is improved with move, swap and reorder operations.",
             "Low-priority tickets are added only when they fit well and do not cause SLA/workday issues.",
             "Every mechanic gets a 45 minute break planned inside the 11:00-13:00 window.",
+            "A mechanic with one or more required items on the route gets one HQ pickup before the first required ticket.",
             "Travel and break blocks are returned as explicit timeline items, instead of appearing as gaps between tickets.",
             "Urgent and earliest-deadline tickets are protected first.",
         ],

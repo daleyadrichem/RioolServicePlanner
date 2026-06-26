@@ -12,7 +12,7 @@
             "VEER",
             "LADDER"
           ],
-          "home_address": "Jac. van Looystraat 5, 5216 SB 's-Hertogenbosch"
+          "home_address": "Hoogveldsestraat 9, Oss"
         },
         {
           "name": "Monteur 2",
@@ -23,7 +23,7 @@
             "VEER",
             "LADDER"
           ],
-          "home_address": "Markt 1, 's-Hertogenbosch"
+          "home_address": "Krommeniestraat 13, Tilburg"
         },
         {
           "name": "Monteur 3",
@@ -34,7 +34,7 @@
             "VEER",
             "LADDER"
           ],
-          "home_address": "Stationsplein 1, 's-Hertogenbosch"
+          "home_address": "Courtine 2, Zaltbommel"
         },
         {
           "name": "Monteur 4",
@@ -44,7 +44,7 @@
           "requirements": [
             "LADDER"
           ],
-          "home_address": "Parade 12, 's-Hertogenbosch"
+          "home_address": "Van Heemstraweg 130, Dreumel"
         },
         {
           "name": "Monteur 5",
@@ -52,7 +52,7 @@
           "workday_start": "08:00",
           "workday_end": "17:00",
           "requirements": [],
-          "home_address": "Hinthamerstraat 72, 's-Hertogenbosch"
+          "home_address": "Van Voordenpark 15, Zaltbommel"
         }
       ]
     }

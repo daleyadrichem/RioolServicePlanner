@@ -81,7 +81,8 @@ class InitialPlanningPayload(BaseModel):
     branch_id: int = 1
     planned_date: str | None = None
     refresh_route_cache: bool = False
-    max_candidates_per_technician: int = 10
+    max_candidates_per_technician: int = 0
+    requirement_pickup_duration_minutes: int = 5
     initial_non_urgent_minutes_per_technician: int = 360
     default_service_minutes: int = 60
     multi_start_iterations: int = 40

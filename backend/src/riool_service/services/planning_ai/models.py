@@ -17,7 +17,7 @@ class PlanningConfig:
 
     branch_id: int
     planned_date: datetime
-    max_candidates_per_technician: int = 10
+    max_candidates_per_technician: int = 0
     initial_non_urgent_minutes_per_technician: int = 6 * 60
     default_service_minutes: int = 60
     multi_start_iterations: int = 40
@@ -28,6 +28,7 @@ class PlanningConfig:
     break_duration_minutes: int = 45
     break_window_start_minutes: int = 11 * 60
     break_window_end_minutes: int = 13 * 60
+    requirement_pickup_duration_minutes: int = 5
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class TechnicianInput:
     workday_start_minutes: int
     workday_end_minutes: int
     requirement_codes: frozenset[str]
+    office_location_id: int
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,26 @@ class PlannedTravel:
             "planned_end_at": self.planned_end_at.isoformat(),
             "before_ticket_id": self.before_ticket_id,
             "after_ticket_id": self.after_ticket_id,
+        }
+
+
+@dataclass
+class PlannedRequirementPickup:
+    location_id: int
+    requirement_codes: frozenset[str]
+    planned_start_at: datetime
+    planned_end_at: datetime
+    duration_minutes: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "type": "requirement_pickup",
+            "title": "Pick up requirements at HQ",
+            "location_id": self.location_id,
+            "requirements": sorted(self.requirement_codes),
+            "planned_start_at": self.planned_start_at.isoformat(),
+            "planned_end_at": self.planned_end_at.isoformat(),
+            "duration_minutes": self.duration_minutes,
         }
 
 
