@@ -37,6 +37,7 @@ export const api = {
   },
   getTicketStatistics: () => request('/tickets/statistics'),
   getBranches: () => request('/branches'),
+  getRequirements: () => request('/requirements'),
   validateTicketAddress: (payload) => request('/tickets/validate-address', { method: 'POST', body: JSON.stringify(payload) }),
   createTicket: (payload) => request('/tickets', { method: 'POST', body: JSON.stringify(payload) }),
   updateTicket: (id, payload) => request(`/tickets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),

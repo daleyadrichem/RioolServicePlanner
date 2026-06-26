@@ -70,6 +70,7 @@ class TicketInput:
     created_at: datetime
     service_minutes: int
     requirement_codes: frozenset[str]
+    supply_requirement_codes: frozenset[str]
     subject: str | None = None
     address: str = ""
 
@@ -109,6 +110,9 @@ class PlannedStop:
             "subject": self.ticket.subject,
             "address": self.ticket.address,
             "required_skills": sorted(self.ticket.requirement_codes),
+            "supply_requirements": sorted(self.ticket.supply_requirement_codes),
+            "requirements": sorted(self.ticket.requirement_codes | self.ticket.supply_requirement_codes),
+            "requires_supplies": bool(self.ticket.supply_requirement_codes),
             "travel_minutes_before": self.travel_minutes_before,
             "distance_km_before": round(self.distance_km_before, 3),
             "planned_start_at": self.planned_start_at.isoformat(),
@@ -160,7 +164,7 @@ class PlannedRequirementPickup:
     def as_dict(self) -> dict[str, Any]:
         return {
             "type": "requirement_pickup",
-            "title": "Pick up requirements at HQ",
+            "title": "Benodigdheden ophalen",
             "location_id": self.location_id,
             "requirements": sorted(self.requirement_codes),
             "planned_start_at": self.planned_start_at.isoformat(),

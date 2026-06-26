@@ -12,6 +12,7 @@ from riool_service.database.models.requirement import Requirement
 DEFAULT_REQUIREMENTS: Final[tuple[dict[str, str], ...]] = (
     {"code": "VEER", "name": "Trekveer"},
     {"code": "LADDER", "name": "Ladder"},
+    {"code": "SUPPLIES", "name": "Benodigdheden"},
 )
 
 

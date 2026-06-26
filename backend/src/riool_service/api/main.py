@@ -27,6 +27,7 @@ class SimulationTicketPayload(BaseModel):
     city: str | None = "Den Bosch"
     requires_ladder: bool = False
     requires_spring: bool = False
+    requires_supplies: bool = False
     requirements: list[str] = []
     description: str | None = None
     location_id: int | None = None
@@ -46,6 +47,7 @@ class TicketPayload(BaseModel):
     branch_name: str | None = None
     requires_ladder: bool = False
     requires_spring: bool = False
+    requires_supplies: bool = False
     requirements: list[str] = []
     description: str | None = None
     location_id: int | None = None
@@ -157,6 +159,12 @@ def list_scenarios() -> list[dict]:
 def list_branches(session: SessionDep) -> list[dict]:
     return ticket_service.list_branches(session)
 
+
+
+
+@app.get("/requirements")
+def list_requirements(session: SessionDep) -> list[dict]:
+    return ticket_service.list_requirements(session)
 
 @app.get("/technicians")
 def list_technicians(session: SessionDep) -> list[dict]:

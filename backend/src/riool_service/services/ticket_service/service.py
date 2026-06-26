@@ -32,6 +32,13 @@ ACTIVE_ASSIGNMENT_STATUSES = {
     PlanningAssignmentStatus.COMPLETED,
 }
 
+DEFAULT_REQUIREMENTS = (
+    {"code": "VEER", "name": "Trekveer"},
+    {"code": "LADDER", "name": "Ladder"},
+    {"code": "SUPPLIES", "name": "Benodigdheden"},
+)
+SUPPLY_REQUIREMENT_CODES = {"SUPPLIES"}
+
 
 class TicketNotFoundError(ValueError):
     """Raised when a requested ticket does not exist."""
@@ -39,7 +46,35 @@ class TicketNotFoundError(ValueError):
 
 def ensure_ticket_tables() -> None:
     """Create tables that may not exist yet in older local databases."""
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        ensure_default_requirements(session)
+        session.commit()
+
+
+def ensure_default_requirements(session: Session) -> None:
+    for item in DEFAULT_REQUIREMENTS:
+        requirement = session.scalar(select(Requirement).where(Requirement.code == item["code"]))
+        if requirement is None:
+            session.add(Requirement(**item))
+        else:
+            requirement.name = item["name"]
+
+
+def list_requirements(session: Session) -> list[dict[str, Any]]:
+    ensure_default_requirements(session)
+    session.flush()
+    requirements = session.scalars(select(Requirement).order_by(Requirement.name)).all()
+    return [
+        {
+            "code": requirement.code.upper(),
+            "name": requirement.name,
+            "requires_office_pickup": requirement.code.upper() in SUPPLY_REQUIREMENT_CODES,
+            "is_technician_skill": requirement.code.upper() not in SUPPLY_REQUIREMENT_CODES,
+        }
+        for requirement in requirements
+    ]
 
 
 def _value(value: Any) -> Any:
@@ -142,6 +177,7 @@ def _ticket_to_dict(ticket: Ticket) -> dict[str, Any]:
         "description": ticket.description,
         "requires_ladder": "LADDER" in requirements,
         "requires_spring": "VEER" in requirements,
+        "requires_supplies": "SUPPLIES" in requirements,
         "requirements": sorted(requirements),
         "technician_id": technician.id if technician is not None else None,
         "technician_name": technician.name if technician is not None else None,
@@ -233,6 +269,8 @@ def _requirement_codes_from_payload(payload: dict[str, Any]) -> list[str]:
         codes.add("LADDER")
     if payload.get("requires_spring"):
         codes.add("VEER")
+    if payload.get("requires_supplies"):
+        codes.add("SUPPLIES")
     return sorted(codes)
 
 
@@ -472,7 +510,7 @@ def update_ticket(session: Session, ticket_id: int, payload: dict[str, Any]) -> 
             ticket.completed_at = None
     if "address" in payload or "location_id" in payload:
         ticket.location_id = _get_or_create_location(session, payload).id
-    if {"requirements", "requires_ladder", "requires_spring"} & set(payload):
+    if {"requirements", "requires_ladder", "requires_spring", "requires_supplies"} & set(payload):
         _replace_ticket_requirements(session, ticket_id=ticket.id, requirement_codes=_requirement_codes_from_payload(payload))
 
     session.flush()

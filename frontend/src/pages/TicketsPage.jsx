@@ -59,6 +59,7 @@ const emptyTicketForm = {
   description: '',
   requires_ladder: false,
   requires_spring: false,
+  requires_supplies: false,
 };
 
 function ticketKey(ticket) {
@@ -75,16 +76,34 @@ function formatCreated(value) {
   return new Date(value).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+function requirementCodeSet(row) {
+  const codes = new Set((row.requirements || []).map((item) => String(item).toUpperCase()));
+  if (row.requires_ladder) codes.add('LADDER');
+  if (row.requires_spring) codes.add('VEER');
+  if (row.requires_supplies) codes.add('SUPPLIES');
+  return codes;
+}
+
 function requirementsString(ticket) {
-  return `${ticket.requires_ladder ? 'ladder ' : ''}${ticket.requires_spring ? 'waves' : ''}`;
+  return [...requirementCodeSet(ticket)].map((code) => code.toLowerCase());
 }
 
 function matchesRequirement(row, requirement) {
-  if (requirement === 'Ladder') return row.requires_ladder;
-  if (requirement === 'Veer') return row.requires_spring;
-  if (requirement === 'Geen requirements') return !row.requires_ladder && !row.requires_spring;
-  return true;
+  const filter = String(requirement || 'all').toUpperCase();
+  const codes = requirementCodeSet(row);
+  if (filter === 'ALL' || filter === 'ALLE REQUIREMENTS') return true;
+  if (filter === 'NONE' || filter === 'GEEN REQUIREMENTS') return codes.size === 0;
+  return codes.has(filter);
 }
+
+function requirementLabel(code, fallback = '') {
+  const normalized = String(code || '').toUpperCase();
+  if (normalized === 'LADDER') return 'Ladder';
+  if (normalized === 'VEER') return 'Trekveer';
+  if (normalized === 'SUPPLIES') return 'Benodigdheden';
+  return fallback || normalized;
+}
+
 function normalizeTicketStatus(status) {
   return String(status || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
 }
@@ -135,16 +154,22 @@ function formFromTicket(ticket, defaultBranchId = '') {
     description: ticket.description || '',
     requires_ladder: Boolean(ticket.requires_ladder),
     requires_spring: Boolean(ticket.requires_spring),
+    requires_supplies: Boolean(ticket.requires_supplies || (ticket.requirements || []).includes('SUPPLIES')),
   };
 }
 
-function TicketFilters({ filters, technicians, onChange }) {
+function TicketFilters({ filters, technicians, requirements, onChange }) {
   const [showMore, setShowMore] = useState(false);
   const setFilter = (field, value) => onChange((current) => ({ ...current, [field]: value }));
   const technicianOptions = [
     { value: 'all', label: 'Alle monteurs' },
     { value: 'unassigned', label: 'Nog niet toegewezen' },
     ...(technicians || []).map((technician) => ({ value: String(technician.id), label: technician.name })),
+  ];
+  const requirementOptions = [
+    { value: 'all', label: 'Alle requirements' },
+    ...(requirements || []).map((requirement) => ({ value: requirement.code, label: requirement.name || requirementLabel(requirement.code) })),
+    { value: 'none', label: 'Geen requirements' },
   ];
 
   return (
@@ -172,10 +197,7 @@ function TicketFilters({ filters, technicians, onChange }) {
           <label>
             Requirement
             <select value={filters.requirement} onChange={(event) => setFilter('requirement', event.target.value)}>
-              <option>Alle requirements</option>
-              <option>Ladder</option>
-              <option>Veer</option>
-              <option>Geen requirements</option>
+              {requirementOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <label>
@@ -266,7 +288,7 @@ function TicketDetail({ ticket, onDelete, onAssign, onDone, onEdit }) {
       <hr />
       <div className="kv"><b>Urgentie</b><Tag>{ticket.urgency}</Tag></div>
       <div className="kv"><b>Status</b><Tag>{ticket.status}</Tag></div>
-      <div className="kv"><b>Vereisten</b><span>{ticket.requires_ladder && <><Ladder /> Ladder </>}{ticket.requires_spring && <><RequirementIcons requirements="waves" /> Trekveer</>}</span></div>
+      <div className="kv"><b>Vereisten</b><span>{requirementsString(ticket).length ? requirementsString(ticket).map((code) => <span key={code} className="inlineRequirement"><RequirementIcons requirements={[code]} /> {requirementLabel(code)}</span>) : 'Geen'}</span></div>
       <h3>Omschrijving</h3>
       <p>{ticket.description || 'Geen omschrijving ingevuld.'}</p>
       <h3>Monteur</h3>
@@ -279,7 +301,7 @@ function TicketDetail({ ticket, onDelete, onAssign, onDone, onEdit }) {
   );
 }
 
-function TicketModal({ ticket, mode, branches, onClose, onSave }) {
+function TicketModal({ ticket, mode, branches, requirements, onClose, onSave }) {
   const defaultBranchId = branches?.[0]?.id || '';
   const [form, setForm] = useState(() => formFromTicket(ticket, defaultBranchId));
   const [checkingAddress, setCheckingAddress] = useState(false);
@@ -372,8 +394,12 @@ function TicketModal({ ticket, mode, branches, onClose, onSave }) {
 
         <label>Requirement</label>
         <div className="checks">
-          <label><input type="checkbox" disabled={formDisabled} checked={form.requires_ladder} onChange={(event) => setField('requires_ladder', event.target.checked)} /> Ladder</label>
-          <label><input type="checkbox" disabled={formDisabled} checked={form.requires_spring} onChange={(event) => setField('requires_spring', event.target.checked)} /> Veer</label>
+          {(requirements || []).map((requirement) => {
+            const code = String(requirement.code || '').toUpperCase();
+            const field = code === 'LADDER' ? 'requires_ladder' : code === 'VEER' ? 'requires_spring' : code === 'SUPPLIES' ? 'requires_supplies' : null;
+            if (!field) return null;
+            return <label key={code}><input type="checkbox" disabled={formDisabled} checked={Boolean(form[field])} onChange={(event) => setField(field, event.target.checked)} /> {requirement.name || requirementLabel(code)}</label>;
+          })}
         </div>
 
         <div className="formActions">
@@ -386,7 +412,7 @@ function TicketModal({ ticket, mode, branches, onClose, onSave }) {
 }
 
 export function TicketsPage() {
-  const [filters, setFilters] = useState({ urgency: 'all', status: 'all', requirement: 'Alle requirements', technician: 'all' });
+  const [filters, setFilters] = useState({ urgency: 'all', status: 'all', requirement: 'all', technician: 'all' });
   const [pageSize, setPageSize] = useState(12);
   const [page, setPage] = useState(1);
   const apiFilters = useMemo(() => ({ urgency: filters.urgency }), [filters.urgency]);
@@ -394,10 +420,16 @@ export function TicketsPage() {
   const loadStats = useCallback(() => api.getTicketStatistics(), []);
   const loadBranches = useCallback(() => api.getBranches(), []);
   const loadTechnicians = useCallback(() => api.getTechnicians(), []);
+  const loadRequirements = useCallback(() => api.getRequirements(), []);
   const { data: tickets, loading, error, reload } = useApi(loadTickets, []);
   const { data: stats, reload: reloadStats } = useApi(loadStats, emptyStats);
   const { data: branches } = useApi(loadBranches, emptyBranches);
   const { data: technicians } = useApi(loadTechnicians, []);
+  const { data: requirements } = useApi(loadRequirements, [
+    { code: 'LADDER', name: 'Ladder' },
+    { code: 'VEER', name: 'Trekveer' },
+    { code: 'SUPPLIES', name: 'Benodigdheden' },
+  ]);
   const [selectedId, setSelectedId] = useState(null);
   const [modalState, setModalState] = useState({ mode: null, ticket: null });
 
@@ -476,7 +508,7 @@ export function TicketsPage() {
         <StatCard icon={Clock} label="Ongepland" value={stats.unplanned} sub="• nog toewijzen" tone="orange" />
         <StatCard icon={CheckCircle2} label="Afgerond" value={stats.finished} sub="• status completed" tone="green" />
       </section>
-      <TicketFilters filters={filters} technicians={technicians} onChange={setFilters} />
+      <TicketFilters filters={filters} technicians={technicians} requirements={requirements} onChange={setFilters} />
       <div className="ticketsLayout">
         <TicketsTable
           tickets={paginatedTickets}
@@ -503,6 +535,7 @@ export function TicketsPage() {
           mode={modalState.mode}
           ticket={modalState.ticket}
           branches={branches}
+          requirements={requirements}
           onClose={closeModal}
           onSave={saveModalTicket}
         />

@@ -487,10 +487,10 @@ class InitialRouteOptimizer:
         previous_ticket_id: int | None = None
         break_taken = False
         pickup_done = False
-        route_requirement_codes = frozenset(
+        route_supply_requirement_codes = frozenset(
             code
             for route_ticket_id in route.ticket_ids
-            for code in self.ticket_by_id[route_ticket_id].requirement_codes
+            for code in self.ticket_by_id[route_ticket_id].supply_requirement_codes
         )
         timeline: list[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak] = []
 
@@ -504,7 +504,7 @@ class InitialRouteOptimizer:
             travel_minutes_to_hq = 0
             distance_km_to_hq = 0.0
 
-            if ticket.requirement_codes and not pickup_done:
+            if ticket.supply_requirement_codes and not pickup_done:
                 requires_hq_pickup = True
                 hq_location_id = route.technician.office_location_id
                 travel_minutes = self.matrix.duration(previous_location_id, hq_location_id)
@@ -533,7 +533,7 @@ class InitialRouteOptimizer:
                 timeline.append(
                     PlannedRequirementPickup(
                         location_id=hq_location_id,
-                        requirement_codes=route_requirement_codes,
+                        requirement_codes=route_supply_requirement_codes,
                         planned_start_at=pickup_start,
                         planned_end_at=pickup_end,
                         duration_minutes=self.config.requirement_pickup_duration_minutes,
@@ -749,7 +749,7 @@ class InitialRouteOptimizer:
         return (
             ticket.urgency_rank,
             ticket.deadline_at,
-            -len(ticket.requirement_codes),
+            -(len(ticket.requirement_codes) + len(ticket.supply_requirement_codes)),
             ticket.created_at,
             ticket.id,
         )

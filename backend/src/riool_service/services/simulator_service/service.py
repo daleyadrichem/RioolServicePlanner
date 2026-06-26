@@ -230,6 +230,7 @@ def _simulation_ticket_to_dict(ticket: SimulationTicket) -> dict[str, Any]:
         "urgency": _value(ticket.urgency),
         "requires_ladder": "LADDER" in requirements,
         "requires_spring": "VEER" in requirements,
+        "requires_supplies": "SUPPLIES" in requirements,
         "requirements": sorted(requirements),
         "subject": ticket.subject.name if ticket.subject else "Onbekend",
         "address": _ticket_address(ticket),
@@ -305,6 +306,8 @@ def _requirement_codes_from_payload(payload: dict[str, Any]) -> list[str]:
         codes.add("LADDER")
     if payload.get("requires_spring"):
         codes.add("VEER")
+    if payload.get("requires_supplies"):
+        codes.add("SUPPLIES")
     return sorted(codes)
 
 

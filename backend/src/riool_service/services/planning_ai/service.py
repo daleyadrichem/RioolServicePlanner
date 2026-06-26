@@ -40,6 +40,9 @@ from riool_service.services.planning_ai.routing import get_planning_route_matrix
 from riool_service.services.planning_ai.selection import load_available_technicians, load_candidate_tickets
 
 
+SUPPLY_REQUIREMENT_CODES = {"SUPPLIES"}
+
+
 class PlanningAiError(ValueError):
     pass
 
@@ -255,7 +258,7 @@ def _route_cache_lookup(
         hq_location_id = technician.branch.location_id if technician.branch else None
         for assignment in assignments:
             ticket_location_id = assignment.ticket.location_id
-            requirement_codes = _requirement_codes_from_ticket(assignment.ticket)
+            requirement_codes = _supply_requirement_codes_from_ticket(assignment.ticket)
             if (
                 requirement_codes
                 and previous_location_id is not None
@@ -301,13 +304,23 @@ def _value(value: Any) -> Any:
 
 
 def _requirement_codes_from_ticket(ticket: Ticket) -> list[str]:
-    return sorted(
-        {
-            link.requirement.code.upper()
-            for link in ticket.ticket_requirements
-            if link.requirement is not None and link.requirement.code is not None
-        }
-    )
+    return sorted(_requirement_code_set_from_ticket(ticket))
+
+
+def _requirement_code_set_from_ticket(ticket: Ticket) -> set[str]:
+    return {
+        link.requirement.code.upper()
+        for link in ticket.ticket_requirements
+        if link.requirement is not None and link.requirement.code is not None
+    }
+
+
+def _skill_requirement_codes_from_ticket(ticket: Ticket) -> list[str]:
+    return sorted(code for code in _requirement_code_set_from_ticket(ticket) if code not in SUPPLY_REQUIREMENT_CODES)
+
+
+def _supply_requirement_codes_from_ticket(ticket: Ticket) -> list[str]:
+    return sorted(code for code in _requirement_code_set_from_ticket(ticket) if code in SUPPLY_REQUIREMENT_CODES)
 
 
 def _technician_to_overview_dict(technician: Technician) -> dict[str, Any]:
@@ -355,6 +368,7 @@ def _assignment_to_planning_item(assignment: PlanningAssignment) -> dict[str, An
         "description": ticket.description,
         "requires_ladder": "LADDER" in codes,
         "requires_spring": "VEER" in codes,
+        "requires_supplies": "SUPPLIES" in codes,
         "requirements": codes,
         "characteristics": codes,
         "type": "ticket",
@@ -405,7 +419,7 @@ def _assignments_to_timeline_items_for_single_day(
     items: list[dict[str, Any]] = []
     break_inserted = False
     pickup_inserted = False
-    route_requirement_codes = sorted({code for assignment in assignments for code in _requirement_codes_from_ticket(assignment.ticket)})
+    route_supply_requirement_codes = sorted({code for assignment in assignments for code in _supply_requirement_codes_from_ticket(assignment.ticket)})
     previous_end = _technician_day_start(technician, planned_date)
     previous_location_id = (
         technician.start_location.id if technician.start_location is not None else None
@@ -413,9 +427,9 @@ def _assignments_to_timeline_items_for_single_day(
 
     for assignment in assignments:
         travel_minutes = int(assignment.estimated_travel_minutes_before or 0)
-        assignment_requirement_codes = _requirement_codes_from_ticket(assignment.ticket)
+        assignment_supply_requirement_codes = _supply_requirement_codes_from_ticket(assignment.ticket)
         split_required_pickup = (
-            bool(assignment_requirement_codes)
+            bool(assignment_supply_requirement_codes)
             and not pickup_inserted
             and planned_date is not None
             and previous_location_id is not None
@@ -465,7 +479,7 @@ def _assignments_to_timeline_items_for_single_day(
                     _requirement_pickup_item(
                         technician.id,
                         hq_location_id,
-                        route_requirement_codes,
+                        route_supply_requirement_codes,
                         pickup_start,
                         duration_minutes=pickup_duration,
                     )
@@ -503,12 +517,12 @@ def _assignments_to_timeline_items_for_single_day(
                 items.append(break_item)
                 break_inserted = True
 
-        if assignment_requirement_codes and not pickup_inserted and planned_date is not None:
+        if assignment_supply_requirement_codes and not pickup_inserted and planned_date is not None:
             items.append(
                 _requirement_pickup_item(
                     technician.id,
                     technician.branch.location_id if technician.branch else None,
-                    route_requirement_codes,
+                    route_supply_requirement_codes,
                     travel_start,
                 )
             )

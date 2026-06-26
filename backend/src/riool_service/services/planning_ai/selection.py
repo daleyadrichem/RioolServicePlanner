@@ -12,6 +12,8 @@ from riool_service.database.models.ticket_requirement import TicketRequirement
 from riool_service.database.models.tickets import Ticket, TicketStatus, TicketUrgency
 from riool_service.services.planning_ai.models import PlanningConfig, TechnicianInput, TicketInput
 
+SUPPLY_REQUIREMENT_CODES = {"SUPPLIES"}
+
 
 class PlanningSelectionError(ValueError):
     pass
@@ -47,7 +49,7 @@ def load_available_technicians(session: Session, config: PlanningConfig) -> list
         if start_location.latitude is None or start_location.longitude is None:
             continue
         requirement_codes = frozenset(
-            req.requirement.code for req in technician.technician_requirements if req.requirement is not None
+            req.requirement.code.upper() for req in technician.technician_requirements if req.requirement is not None and req.requirement.code is not None
         )
         result.append(
             TechnicianInput(
@@ -95,9 +97,11 @@ def load_candidate_tickets(
     for ticket in tickets:
         if ticket.location is None or ticket.location.latitude is None or ticket.location.longitude is None:
             continue
-        requirement_codes = frozenset(
-            req.requirement.code for req in ticket.ticket_requirements if req.requirement is not None
+        all_requirement_codes = frozenset(
+            req.requirement.code.upper() for req in ticket.ticket_requirements if req.requirement is not None and req.requirement.code is not None
         )
+        requirement_codes = frozenset(code for code in all_requirement_codes if code not in SUPPLY_REQUIREMENT_CODES)
+        supply_requirement_codes = frozenset(code for code in all_requirement_codes if code in SUPPLY_REQUIREMENT_CODES)
         if not any(requirement_codes.issubset(skill_set) for skill_set in technician_skill_sets):
             continue
         candidates.append(
@@ -109,6 +113,7 @@ def load_candidate_tickets(
                 created_at=ticket.created_at,
                 service_minutes=ticket.actual_duration_minutes or config.default_service_minutes,
                 requirement_codes=requirement_codes,
+                supply_requirement_codes=supply_requirement_codes,
                 subject=ticket.subject.name if ticket.subject is not None else None,
                 address=ticket.location.formatted_address or ticket.location.input_address or "",
             )
@@ -142,7 +147,7 @@ def _candidate_sort_key(ticket: TicketInput) -> tuple[int, datetime, int, dateti
     return (
         ticket.urgency_rank,
         ticket.deadline_at,
-        -len(ticket.requirement_codes),
+        -(len(ticket.requirement_codes) + len(ticket.supply_requirement_codes)),
         ticket.created_at,
         ticket.id,
     )

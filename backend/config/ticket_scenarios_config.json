@@ -11,7 +11,8 @@
       "percentage_laag_prio": 45,
       "requirements_percentages": {
         "ladder": 20,
-        "veer": 35
+        "veer": 35,
+        "supplies": 15
       },
       "aantal_tickets_min": 30,
       "aantal_tickets_max": 40,
@@ -38,7 +39,8 @@
       "percentage_laag_prio": 20,
       "requirements_percentages": {
         "ladder": 20,
-        "veer": 35
+        "veer": 35,
+        "supplies": 15
       },
       "aantal_tickets_min": 30,
       "aantal_tickets_max": 40,
@@ -70,7 +72,8 @@
       "percentage_laag_prio": 30,
       "requirements_percentages": {
         "ladder": 60,
-        "veer": 25
+        "veer": 25,
+        "supplies": 15
       },
       "aantal_tickets_min": 30,
       "aantal_tickets_max": 40,

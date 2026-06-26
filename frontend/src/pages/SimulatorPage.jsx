@@ -65,18 +65,35 @@ function isValidManualAddressFormat(value) {
 }
 
 
+function requirementCodeSet(row) {
+  const codes = new Set((row.requirements || []).map((item) => String(item).toUpperCase()));
+  if (row.requires_ladder) codes.add('LADDER');
+  if (row.requires_spring) codes.add('VEER');
+  if (row.requires_supplies) codes.add('SUPPLIES');
+  return codes;
+}
+
+function requirementLabel(code, fallback = '') {
+  const normalized = String(code || '').toUpperCase();
+  if (normalized === 'LADDER') return 'Ladder';
+  if (normalized === 'VEER') return 'Trekveer';
+  if (normalized === 'SUPPLIES') return 'Benodigdheden';
+  return fallback || normalized;
+}
+
 function matchesFilter(row, filters) {
   const urgency = toUrgencyApiValue(row.urgency);
+  const filter = String(filters.requirement || 'all').toUpperCase();
+  const codes = requirementCodeSet(row);
 
   if (filters.urgency !== 'all' && urgency !== filters.urgency) return false;
-  if (filters.requirement === 'Ladder' && !row.requires_ladder) return false;
-  if (filters.requirement === 'Veer' && !row.requires_spring) return false;
-  if (filters.requirement === 'Geen requirements' && (row.requires_ladder || row.requires_spring)) return false;
+  if (filter === 'NONE' || filter === 'GEEN REQUIREMENTS') return codes.size === 0;
+  if (filter !== 'ALL' && filter !== 'ALLE REQUIREMENTS' && !codes.has(filter)) return false;
 
   return true;
 }
 
-function SimulatorFilters({ filters, onChange }) {
+function SimulatorFilters({ filters, requirements, onChange }) {
   const [showMore, setShowMore] = useState(false);
   const urgencyOptions = [
     { value: 'all', label: 'Alle' },
@@ -86,6 +103,11 @@ function SimulatorFilters({ filters, onChange }) {
   ];
 
   const setFilter = (field, value) => onChange((current) => ({ ...current, [field]: value }));
+  const requirementOptions = [
+    { value: 'all', label: 'Alle requirements' },
+    ...(requirements || []).map((requirement) => ({ value: requirement.code, label: requirement.name || requirementLabel(requirement.code) })),
+    { value: 'none', label: 'Geen requirements' },
+  ];
 
   return (
     <section className="simFilters">
@@ -111,10 +133,7 @@ function SimulatorFilters({ filters, onChange }) {
           <label>
             Requirement
             <select value={filters.requirement} onChange={(event) => setFilter('requirement', event.target.value)}>
-              <option>Alle requirements</option>
-              <option>Ladder</option>
-              <option>Veer</option>
-              <option>Geen requirements</option>
+              {requirementOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
         </div>
@@ -129,7 +148,7 @@ function InjectionTable({ injections, onDelete, onEdit, disabledActions }) {
       <h2>Ticket injecties</h2>
       <table>
         <thead>
-          <tr><th>Tijd</th><th>Ticket ID</th><th>Urgentie</th><th>Ladder</th><th>Veer</th><th>Onderwerp</th><th>Adres</th><th>Acties</th></tr>
+          <tr><th>Tijd</th><th>Ticket ID</th><th>Urgentie</th><th>Ladder</th><th>Veer</th><th>Benodigdheden</th><th>Onderwerp</th><th>Adres</th><th>Acties</th></tr>
         </thead>
         <tbody>
           {injections.map((row) => (
@@ -139,6 +158,7 @@ function InjectionTable({ injections, onDelete, onEdit, disabledActions }) {
               <td><Tag>{toUrgencyLabel(row.urgency)}</Tag></td>
               <td>{row.requires_ladder ? <span className="roundCheck">✓</span> : '–'}</td>
               <td>{row.requires_spring ? <span className="roundCheck">✓</span> : '–'}</td>
+              <td>{row.requires_supplies ? <span className="roundCheck">✓</span> : '–'}</td>
               <td>{row.subject}</td>
               <td>{row.address}</td>
               <td>
@@ -167,6 +187,7 @@ const emptyTicketForm = {
   city: 'Den Bosch',
   requires_ladder: false,
   requires_spring: false,
+  requires_supplies: false,
 };
 
 function formFromInjection(ticket) {
@@ -180,10 +201,11 @@ function formFromInjection(ticket) {
     city: ticket.city || 'Den Bosch',
     requires_ladder: Boolean(ticket.requires_ladder),
     requires_spring: Boolean(ticket.requires_spring),
+    requires_supplies: Boolean(ticket.requires_supplies || (ticket.requirements || []).includes('SUPPLIES')),
   };
 }
 
-function NewTicketPanel({ onSave, editingTicket, onCancelEdit, disabled }) {
+function NewTicketPanel({ onSave, editingTicket, onCancelEdit, disabled, requirements }) {
   const [form, setForm] = useState(() => formFromInjection(null));
   const [checkingAddress, setCheckingAddress] = useState(false);
   const isEditing = Boolean(editingTicket);
@@ -266,8 +288,12 @@ function NewTicketPanel({ onSave, editingTicket, onCancelEdit, disabled }) {
       />
       <label>Requirement</label>
       <div className="checks">
-        <label><input type="checkbox" disabled={formDisabled} checked={form.requires_ladder} onChange={(event) => setField('requires_ladder', event.target.checked)} /> Ladder</label>
-        <label><input type="checkbox" disabled={formDisabled} checked={form.requires_spring} onChange={(event) => setField('requires_spring', event.target.checked)} /> Veer</label>
+        {(requirements || []).map((requirement) => {
+          const code = String(requirement.code || '').toUpperCase();
+          const field = code === 'LADDER' ? 'requires_ladder' : code === 'VEER' ? 'requires_spring' : code === 'SUPPLIES' ? 'requires_supplies' : null;
+          if (!field) return null;
+          return <label key={code}><input type="checkbox" disabled={formDisabled} checked={Boolean(form[field])} onChange={(event) => setField(field, event.target.checked)} /> {requirement.name || requirementLabel(code)}</label>;
+        })}
       </div>
       <div className="formActions">
         <Button primary disabled={formDisabled} onClick={handleSave}><Save size={18} />{checkingAddress ? 'Controleren...' : 'Opslaan'}</Button>
@@ -291,11 +317,17 @@ export function SimulatorPage() {
   const loadState = useCallback(() => api.getSimulatorState(), []);
   const loadInjections = useCallback(() => api.getInjections(), []);
   const loadScenarios = useCallback(() => api.getScenarios(), []);
+  const loadRequirements = useCallback(() => api.getRequirements(), []);
   const { data: state, loading, error, reload: reloadState } = useApi(loadState, emptySimulatorState);
   const { data: injections, reload: reloadInjections } = useApi(loadInjections, []);
   const { data: scenarios } = useApi(loadScenarios, emptyScenarios);
+  const { data: requirements } = useApi(loadRequirements, [
+    { code: 'LADDER', name: 'Ladder' },
+    { code: 'VEER', name: 'Trekveer' },
+    { code: 'SUPPLIES', name: 'Benodigdheden' },
+  ]);
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
-  const [filters, setFilters] = useState({ urgency: 'all', requirement: 'Alle requirements' });
+  const [filters, setFilters] = useState({ urgency: 'all', requirement: 'all' });
   const [editingTicket, setEditingTicket] = useState(null);
   const scenarioList = useMemo(() => scenarios || [], [scenarios]);
   const simulationIsRunning = isSimulationRunning(state?.status);
@@ -348,7 +380,7 @@ export function SimulatorPage() {
         <StatCard icon={CheckCircle2} label="Vandaag ingeschoten" value={stats.injected_today} sub={`laatste injectie ${stats.last_injection}`} tone="green" />
         <StatCard icon={Clock} label="Huidige simulatietijd" value={state.current_time} sub={`snelheid ${state.speed}x`} tone="blue" />
       </section>
-      <SimulatorFilters filters={filters} onChange={setFilters} />
+      <SimulatorFilters filters={filters} requirements={requirements} onChange={setFilters} />
       <div className="simLayout">
         <InjectionTable
           injections={filteredInjections}
@@ -361,6 +393,7 @@ export function SimulatorPage() {
           editingTicket={editingTicket}
           onCancelEdit={() => setEditingTicket(null)}
           onSave={saveSimulationTicket}
+          requirements={requirements}
         />
         <ActivityLog items={state.activity_log || []} />
       </div>

@@ -90,7 +90,8 @@ function normalizeTimelineItem(rawItem, index, fallbackDate) {
     color_hint: rawItem.color_hint || (isTravel ? 'grey' : isRequirementPickup ? 'blue' : rawItem.urgency?.toLowerCase()),
     requires_ladder: rawItem.requires_ladder ?? (rawItem.required_skills || []).includes('LADDER'),
     requires_spring: rawItem.requires_spring ?? (rawItem.required_skills || []).includes('VEER'),
-    characteristics: rawItem.characteristics || rawItem.required_skills || [],
+    requires_supplies: rawItem.requires_supplies ?? (rawItem.requirements || rawItem.supply_requirements || []).includes('SUPPLIES'),
+    characteristics: rawItem.characteristics || rawItem.requirements || rawItem.required_skills || [],
     _startMinutes: startMinutes,
     _endMinutes: endMinutes,
   };
@@ -123,8 +124,9 @@ function characteristicsLabel(item) {
   const labels = [];
   if (item.requires_ladder) labels.push('Ladder');
   if (item.requires_spring) labels.push('Trekveer');
+  if (item.requires_supplies) labels.push('Benodigdheden');
   const extra = (item.characteristics || [])
-    .filter((value) => !['LADDER', 'VEER', 'Ladder', 'Waves'].includes(String(value)))
+    .filter((value) => !['LADDER', 'VEER', 'SUPPLIES', 'Ladder', 'Waves', 'Supplies'].includes(String(value)))
     .map(String);
   return [...labels, ...extra].join(', ') || 'Geen';
 }
@@ -139,7 +141,7 @@ function itemGridStyle(item, columnStartMinutes) {
 }
 
 function PlanningJob({ item, columnStartMinutes }) {
-  const requirement = item.requires_ladder ? 'Ladder' : item.requires_spring ? 'Waves' : null;
+  const requirement = item.requires_ladder ? 'Ladder' : item.requires_spring ? 'Waves' : item.requires_supplies ? 'Supplies' : null;
   const isTravel = item.type === 'TRAVEL';
   const isTicket = item.type === 'TICKET';
   const isRequirementPickup = item.type === 'REQUIREMENT_PICKUP';
