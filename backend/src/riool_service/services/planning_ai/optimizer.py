@@ -27,7 +27,6 @@ UNPLANNED_PENALTY_BY_URGENCY = {
     TicketUrgency.LOW: 20_000,
 }
 OVERTIME_PENALTY_PER_MINUTE = 500
-TRAVEL_PENALTY_PER_MINUTE = 1
 
 
 @dataclass(frozen=True)
@@ -81,6 +80,8 @@ class InitialRouteOptimizer:
             "Low-priority tickets are only inserted when feasible and route-fit is good",
             "A 45 minute break is planned for every mechanic inside the 11:00-13:00 window",
             "If a route contains tickets with requirements, a single HQ pickup is inserted before the first required ticket.",
+            "Initial route workload is capped using service + travel + HQ pickup time, so urgent-ticket capacity remains free.",
+            "Every minute of travel, including HQ detours and return-home travel, is penalized equally in the score.",
         ]
         return best
 
@@ -335,7 +336,8 @@ class InitialRouteOptimizer:
         extra_distance = new_distance - old_distance
 
         priority_bonus = UNPLANNED_PENALTY_BY_URGENCY[ticket.urgency]
-        score_delta = extra_travel + ticket.service_minutes - priority_bonus
+        travel_penalty = max(0, self.config.travel_penalty_per_minute)
+        score_delta = extra_travel * travel_penalty + ticket.service_minutes - priority_bonus
         return Insertion(
             technician_id=route.technician.id,
             position=position,
@@ -360,6 +362,7 @@ class InitialRouteOptimizer:
                 return False
 
             non_urgent_minutes = 0
+            route_work_minutes = self._route_work_minutes(timeline)
             ticket_items = [item for item in timeline if isinstance(item, PlannedStop)]
             for item in ticket_items:
                 if item.planned_start_at > item.ticket.deadline_at:
@@ -374,6 +377,8 @@ class InitialRouteOptimizer:
             if route_end > planning_day_end(self.config, route.technician):
                 return False
             if non_urgent_minutes > self.config.initial_non_urgent_minutes_per_technician:
+                return False
+            if route_work_minutes > self.config.initial_route_work_minutes_per_technician:
                 return False
         return True
 
@@ -425,7 +430,7 @@ class InitialRouteOptimizer:
             sla_misses * SLA_MISS_PENALTY
             + unplanned_penalty
             + overtime * OVERTIME_PENALTY_PER_MINUTE
-            + total_travel * TRAVEL_PENALTY_PER_MINUTE
+            + total_travel * max(0, self.config.travel_penalty_per_minute)
         )
 
     def _route_timeline(
@@ -451,16 +456,25 @@ class InitialRouteOptimizer:
             accumulated_travel_minutes_before_ticket = 0
             accumulated_distance_km_before_ticket = 0.0
 
+            requires_hq_pickup = False
+            hq_location_id: int | None = None
+            travel_minutes_to_hq = 0
+            distance_km_to_hq = 0.0
+
             if ticket.requirement_codes and not pickup_done:
-                travel_minutes = self.matrix.duration(previous_location_id, route.technician.office_location_id)
-                distance_km = self.matrix.distance(previous_location_id, route.technician.office_location_id)
+                requires_hq_pickup = True
+                hq_location_id = route.technician.office_location_id
+                travel_minutes = self.matrix.duration(previous_location_id, hq_location_id)
+                distance_km = self.matrix.distance(previous_location_id, hq_location_id)
+                travel_minutes_to_hq = travel_minutes
+                distance_km_to_hq = distance_km
                 travel_start = current_time
                 travel_end = travel_start + timedelta(minutes=travel_minutes)
                 if travel_minutes > 0:
                     timeline.append(
                         PlannedTravel(
                             from_location_id=previous_location_id,
-                            to_location_id=route.technician.office_location_id,
+                            to_location_id=hq_location_id,
                             travel_minutes=travel_minutes,
                             distance_km=distance_km,
                             planned_start_at=travel_start,
@@ -475,7 +489,7 @@ class InitialRouteOptimizer:
                 pickup_end = pickup_start + timedelta(minutes=self.config.requirement_pickup_duration_minutes)
                 timeline.append(
                     PlannedRequirementPickup(
-                        location_id=route.technician.office_location_id,
+                        location_id=hq_location_id,
                         requirement_codes=route_requirement_codes,
                         planned_start_at=pickup_start,
                         planned_end_at=pickup_end,
@@ -483,7 +497,7 @@ class InitialRouteOptimizer:
                     )
                 )
                 current_time = pickup_end
-                previous_location_id = route.technician.office_location_id
+                previous_location_id = hq_location_id
                 pickup_done = True
             if not break_taken and self._must_break_before_next_job(
                 current_time=current_time,
@@ -499,6 +513,8 @@ class InitialRouteOptimizer:
 
             travel_minutes = self.matrix.duration(previous_location_id, ticket.location_id)
             distance_km = self.matrix.distance(previous_location_id, ticket.location_id)
+            travel_minutes_hq_to_ticket = travel_minutes if requires_hq_pickup else 0
+            distance_km_hq_to_ticket = distance_km if requires_hq_pickup else 0.0
             accumulated_travel_minutes_before_ticket += travel_minutes
             accumulated_distance_km_before_ticket += distance_km
             travel_start = current_time
@@ -526,6 +542,12 @@ class InitialRouteOptimizer:
                     distance_km_before=accumulated_distance_km_before_ticket,
                     planned_start_at=start_at,
                     planned_end_at=end_at,
+                    requires_hq_pickup=requires_hq_pickup,
+                    hq_location_id=hq_location_id,
+                    travel_minutes_to_hq=travel_minutes_to_hq,
+                    distance_km_to_hq=distance_km_to_hq,
+                    travel_minutes_hq_to_ticket=travel_minutes_hq_to_ticket,
+                    distance_km_hq_to_ticket=distance_km_hq_to_ticket,
                 )
             )
             current_time = end_at
@@ -559,6 +581,27 @@ class InitialRouteOptimizer:
                     )
                 )
         return timeline
+
+    def _route_work_minutes(
+        self,
+        timeline: list[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak],
+    ) -> int:
+        """Minutes counted against the initial 5-6h route workload target.
+
+        Lunch is excluded, but service, all driving legs, HQ pickup duration, and
+        return-home travel are included. This keeps average urgent-ticket room
+        available without letting long travel routes look artificially light.
+        """
+        return sum(
+            item.travel_minutes
+            if isinstance(item, PlannedTravel)
+            else item.ticket.service_minutes
+            if isinstance(item, PlannedStop)
+            else item.duration_minutes
+            if isinstance(item, PlannedRequirementPickup)
+            else 0
+            for item in timeline
+        )
 
     def _must_break_before_next_job(
         self,

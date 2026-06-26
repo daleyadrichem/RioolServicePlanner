@@ -285,6 +285,43 @@ def _route_for_technician(
         stops.append({"type": "start", "label": f"Start {technician.name}", **start})
 
     for assignment in ordered_assignments:
+        if getattr(assignment, "requires_hq_pickup", False):
+            hq_location = (
+                assignment.technician.branch.location
+                if assignment.technician and assignment.technician.branch
+                else None
+            )
+            hq_point = _location_to_point(hq_location)
+            if hq_point is not None:
+                coordinates.append([hq_point["latitude"], hq_point["longitude"]])
+                stops.append(
+                    {
+                        "type": "hq_pickup",
+                        "label": "HQ pickup",
+                        "ticket_id": assignment.ticket_id,
+                        "assignment_id": assignment.id,
+                        "sequence_order": assignment.sequence_order,
+                        "travel_minutes_to_hq": int(
+                            getattr(assignment, "estimated_travel_minutes_to_hq", 0) or 0
+                        ),
+                        "distance_km_to_hq": round(
+                            float(getattr(assignment, "estimated_distance_km_to_hq", 0) or 0),
+                            1,
+                        ),
+                        "travel_minutes_hq_to_ticket": int(
+                            getattr(assignment, "estimated_travel_minutes_hq_to_ticket", 0) or 0
+                        ),
+                        "distance_km_hq_to_ticket": round(
+                            float(
+                                getattr(assignment, "estimated_distance_km_hq_to_ticket", 0)
+                                or 0
+                            ),
+                            1,
+                        ),
+                        **hq_point,
+                    }
+                )
+
         point = _location_to_point(assignment.ticket.location)
         if point is None:
             continue
@@ -298,6 +335,7 @@ def _route_for_technician(
                 "sequence_order": assignment.sequence_order,
                 "planned_start_at": assignment.planned_start_at.isoformat() if assignment.planned_start_at else None,
                 "planned_end_at": assignment.planned_end_at.isoformat() if assignment.planned_end_at else None,
+                "requires_hq_pickup": bool(getattr(assignment, "requires_hq_pickup", False)),
                 **point,
             }
         )

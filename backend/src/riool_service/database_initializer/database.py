@@ -74,6 +74,7 @@ def create_schema(engine: Engine) -> None:
     """
     Base.metadata.create_all(engine)
     _ensure_technician_home_location_column(engine)
+    _ensure_planning_assignment_hq_columns(engine)
 
 
 def _ensure_technician_home_location_column(engine: Engine) -> None:
@@ -118,3 +119,47 @@ def _ensure_technician_home_location_column(engine: Engine) -> None:
             )
         else:
             connection.execute(text("ALTER TABLE technicians ADD COLUMN home_location_id INTEGER"))
+
+
+def _ensure_planning_assignment_hq_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if "planning_assignments" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("planning_assignments")}
+    upgrades = [
+        ("requires_hq_pickup", "BOOLEAN NOT NULL DEFAULT FALSE" if engine.dialect.name == "postgresql" else "BOOLEAN NOT NULL DEFAULT 0"),
+        ("hq_location_id", "INTEGER"),
+        ("estimated_travel_minutes_to_hq", "INTEGER NOT NULL DEFAULT 0"),
+        ("estimated_distance_km_to_hq", "FLOAT NOT NULL DEFAULT 0"),
+        ("estimated_travel_minutes_hq_to_ticket", "INTEGER NOT NULL DEFAULT 0"),
+        ("estimated_distance_km_hq_to_ticket", "FLOAT NOT NULL DEFAULT 0"),
+    ]
+
+    with engine.begin() as connection:
+        for column_name, column_type in upgrades:
+            if column_name not in columns:
+                connection.execute(text(f"ALTER TABLE planning_assignments ADD COLUMN {column_name} {column_type}"))
+
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_planning_assignments_hq_location_id "
+                "ON planning_assignments (hq_location_id)"
+            )
+        )
+
+        if engine.dialect.name == "postgresql":
+            constraint_exists = connection.execute(
+                text(
+                    "SELECT 1 FROM pg_constraint "
+                    "WHERE conname = 'fk_planning_assignments_hq_location_id_locations'"
+                )
+            ).scalar_one_or_none()
+            if constraint_exists is None:
+                connection.execute(
+                    text(
+                        "ALTER TABLE planning_assignments ADD CONSTRAINT "
+                        "fk_planning_assignments_hq_location_id_locations "
+                        "FOREIGN KEY (hq_location_id) REFERENCES locations(id)"
+                    )
+                )

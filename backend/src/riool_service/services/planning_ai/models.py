@@ -18,7 +18,12 @@ class PlanningConfig:
     branch_id: int
     planned_date: datetime
     max_candidates_per_technician: int = 0
+    # Backwards-compatible legacy cap: only non-urgent ticket service minutes.
+    # The optimizer now primarily uses initial_route_work_minutes_per_technician
+    # so travel/HQ pickups are counted in the initial plan workload target.
     initial_non_urgent_minutes_per_technician: int = 6 * 60
+    initial_route_work_minutes_per_technician: int = 330
+    travel_penalty_per_minute: int = 25
     planning_horizon_days: int = 3
     default_service_minutes: int = 60
     multi_start_iterations: int = 40
@@ -76,6 +81,12 @@ class PlannedStop:
     distance_km_before: float
     planned_start_at: datetime
     planned_end_at: datetime
+    requires_hq_pickup: bool = False
+    hq_location_id: int | None = None
+    travel_minutes_to_hq: int = 0
+    distance_km_to_hq: float = 0.0
+    travel_minutes_hq_to_ticket: int = 0
+    distance_km_hq_to_ticket: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +103,12 @@ class PlannedStop:
             "planned_end_at": self.planned_end_at.isoformat(),
             "deadline_at": self.ticket.deadline_at.isoformat(),
             "estimated_duration_minutes": self.ticket.service_minutes,
+            "requires_hq_pickup": self.requires_hq_pickup,
+            "hq_location_id": self.hq_location_id,
+            "travel_minutes_to_hq": self.travel_minutes_to_hq,
+            "distance_km_to_hq": round(self.distance_km_to_hq, 3),
+            "travel_minutes_hq_to_ticket": self.travel_minutes_hq_to_ticket,
+            "distance_km_hq_to_ticket": round(self.distance_km_hq_to_ticket, 3),
         }
 
 

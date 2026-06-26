@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from riool_service.database.db_utils import get_engine
-from riool_service.database.models.base import Base
+from riool_service.database_initializer.database import create_schema
 from riool_service.database.models.planning_assignment import (
     PlanningAssignment,
     PlanningAssignmentSource,
@@ -45,7 +45,7 @@ class PlanningAiError(ValueError):
 
 
 def ensure_planning_ai_tables() -> None:
-    Base.metadata.create_all(get_engine())
+    create_schema(get_engine())
 
 
 
@@ -115,10 +115,10 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None, pla
         int(assignment.estimated_duration_minutes or 0) + int(assignment.estimated_travel_minutes_before or 0)
         for assignment in assignments
     )
-    used_minutes += 5 * sum(
-        1
-        for technician_assignments in assignments_by_technician.values()
-        if any(_requirement_codes_from_ticket(assignment.ticket) for assignment in technician_assignments)
+    used_minutes += sum(
+        5
+        for assignment in assignments
+        if getattr(assignment, "requires_hq_pickup", False)
     )
     if latest_run is not None:
         used_minutes += len(technicians) * 45
@@ -343,6 +343,12 @@ def _assignment_to_planning_item(assignment: PlanningAssignment) -> dict[str, An
         "duration_minutes": assignment.estimated_duration_minutes,
         "travel_minutes_before": assignment.estimated_travel_minutes_before,
         "distance_km_before": round(float(assignment.estimated_distance_km_before or 0), 1),
+        "requires_hq_pickup": bool(getattr(assignment, "requires_hq_pickup", False)),
+        "hq_location_id": getattr(assignment, "hq_location_id", None),
+        "travel_minutes_to_hq": int(getattr(assignment, "estimated_travel_minutes_to_hq", 0) or 0),
+        "distance_km_to_hq": round(float(getattr(assignment, "estimated_distance_km_to_hq", 0) or 0), 1),
+        "travel_minutes_hq_to_ticket": int(getattr(assignment, "estimated_travel_minutes_hq_to_ticket", 0) or 0),
+        "distance_km_hq_to_ticket": round(float(getattr(assignment, "estimated_distance_km_hq_to_ticket", 0) or 0), 1),
         "urgency": _value(ticket.urgency),
         "status": _value(ticket.status),
         "assignment_status": _value(assignment.status),
@@ -770,6 +776,12 @@ def run_initial_planning(session: Session, payload: dict[str, Any]) -> dict[str,
                     estimated_duration_minutes=stop.ticket.service_minutes,
                     estimated_travel_minutes_before=stop.travel_minutes_before,
                     estimated_distance_km_before=stop.distance_km_before,
+                    requires_hq_pickup=stop.requires_hq_pickup,
+                    hq_location_id=stop.hq_location_id,
+                    estimated_travel_minutes_to_hq=stop.travel_minutes_to_hq,
+                    estimated_distance_km_to_hq=stop.distance_km_to_hq,
+                    estimated_travel_minutes_hq_to_ticket=stop.travel_minutes_hq_to_ticket,
+                    estimated_distance_km_hq_to_ticket=stop.distance_km_hq_to_ticket,
                     status=PlanningAssignmentStatus.PLANNED,
                     source=PlanningAssignmentSource.AI,
                 )
@@ -806,18 +818,30 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
         branch_id=branch_id,
         planned_date=planned_date,
         max_candidates_per_technician=int(payload.get("max_candidates_per_technician") or 0),
-        initial_non_urgent_minutes_per_technician=int(payload.get("initial_non_urgent_minutes_per_technician") or 360),
+        initial_non_urgent_minutes_per_technician=int(
+            payload.get("initial_non_urgent_minutes_per_technician") or 360
+        ),
+        initial_route_work_minutes_per_technician=int(
+            payload.get("initial_route_work_minutes_per_technician")
+            or payload.get("initial_planned_minutes_per_technician")
+            or 330
+        ),
+        travel_penalty_per_minute=int(payload.get("travel_penalty_per_minute") or 25),
         planning_horizon_days=max(1, int(payload.get("planning_horizon_days") or 3)),
         default_service_minutes=int(payload.get("default_service_minutes") or 60),
         multi_start_iterations=int(payload.get("multi_start_iterations") or 40),
         local_search_iterations=int(payload.get("local_search_iterations") or 250),
         random_seed=payload.get("random_seed", 42),
         refresh_route_cache=bool(payload.get("refresh_route_cache", False)),
-        low_priority_max_extra_travel_minutes=int(payload.get("low_priority_max_extra_travel_minutes") or 35),
+        low_priority_max_extra_travel_minutes=int(
+            payload.get("low_priority_max_extra_travel_minutes") or 35
+        ),
         break_duration_minutes=int(payload.get("break_duration_minutes") or 45),
         break_window_start_minutes=int(payload.get("break_window_start_minutes") or 11 * 60),
         break_window_end_minutes=int(payload.get("break_window_end_minutes") or 13 * 60),
-        requirement_pickup_duration_minutes=int(payload.get("requirement_pickup_duration_minutes") or 5),
+        requirement_pickup_duration_minutes=int(
+            payload.get("requirement_pickup_duration_minutes") or 5
+        ),
     )
 
 
@@ -948,6 +972,11 @@ def _horizon_solution_as_dict(config: PlanningConfig, day_plans: list[dict[str, 
         "total_distance_km": round(sum(day["summary"]["total_distance_km"] for day in day_results), 3),
         "planning_horizon_days": config.planning_horizon_days,
         "planned_service_minutes_per_technician_per_day": config.initial_non_urgent_minutes_per_technician,
+        "planned_route_work_minutes_per_technician_per_day": config.initial_route_work_minutes_per_technician,
+        "reserved_urgent_minutes_per_technician_per_day": max(
+            0, 8 * 60 - config.initial_route_work_minutes_per_technician
+        ),
+        "travel_penalty_per_minute": config.travel_penalty_per_minute,
         "multi_start_iterations": config.multi_start_iterations,
         "local_search_iterations": config.local_search_iterations,
         "random_seed": config.random_seed,
@@ -971,9 +1000,10 @@ def _horizon_solution_as_dict(config: PlanningConfig, day_plans: list[dict[str, 
         "design_choices": [
             "The overnight initial plan considers all open candidate tickets, not only a small earliest-deadline slice.",
             "The plan is built for the next 3 days by default.",
-            "Each mechanic receives at most the configured 5-6 hours of non-urgent service work per day, leaving same-day capacity for incoming urgent jobs.",
+            "Each mechanic receives about 5-6 hours of planned route workload per day, counting service, travel and HQ pickup time, leaving same-day capacity for incoming urgent jobs.",
             "Unplanned work from day 1 is carried into day 2 and then day 3, so medium tickets are pulled forward before they become urgent.",
             "Travel, lunch breaks and HQ requirement pickups remain explicit timeline items.",
+            "Travel to HQ is stored on the assignment that needs the pickup and rendered as its own route leg on the map.",
         ],
         "routes": routes,
         "days": day_results,
@@ -1042,6 +1072,18 @@ def _solution_as_dict(
             "multi_start_iterations": config.multi_start_iterations,
             "local_search_iterations": config.local_search_iterations,
             "random_seed": config.random_seed,
+            "planned_route_work_minutes_per_technician": (
+                config.initial_route_work_minutes_per_technician
+            ),
+            "travel_penalty_per_minute": config.travel_penalty_per_minute,
+            "penalty_weights": {
+                "sla_miss": 1_000_000,
+                "unplanned_urgent": 750_000,
+                "unplanned_medium": 250_000,
+                "unplanned_low": 20_000,
+                "overtime_per_minute": 500,
+                "travel_per_minute": config.travel_penalty_per_minute,
+            },
         },
         "design_choices": [
             "Multiple randomized start plans are tried to avoid all nearby-home mechanics staying in the same area.",

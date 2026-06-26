@@ -112,6 +112,42 @@ class PlanningAssignment(Base):
         nullable=False,
     )
 
+    requires_hq_pickup: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    hq_location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("locations.id"),
+        nullable=True,
+        index=True,
+    )
+
+    estimated_travel_minutes_to_hq: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    estimated_distance_km_to_hq: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+    )
+
+    estimated_travel_minutes_hq_to_ticket: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    estimated_distance_km_hq_to_ticket: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+    )
+
     status: Mapped[PlanningAssignmentStatus] = mapped_column(
         SqlEnum(PlanningAssignmentStatus, name="planning_assignment_status"),
         default=PlanningAssignmentStatus.PLANNED,
