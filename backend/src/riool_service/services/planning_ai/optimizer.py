@@ -61,7 +61,9 @@ class InitialRouteOptimizer:
         if not self.technicians:
             raise ValueError("At least one technician is required")
         if not self.tickets:
-            return self._empty_solution()
+            solution = self._empty_solution()
+            self._score(solution)
+            return solution
 
         best: PlanningSolution | None = None
         iterations = max(1, self.config.multi_start_iterations)
@@ -297,10 +299,13 @@ class InitialRouteOptimizer:
                     continue
                 if ticket.is_low_priority and not allow_low_priority:
                     continue
-                if ticket.is_low_priority and insertion.extra_travel_minutes > self.config.low_priority_max_extra_travel_minutes:
-                    # Low work is a filler/route-optimizer, not something that may
-                    # ruin a good route or block more urgent work.
-                    continue
+                # Initial planning should assign every feasible open ticket within
+                # the configured multi-day horizon. Low-priority work used to be
+                # skipped when it added more than ``low_priority_max_extra_travel_minutes``
+                # of travel. That made sense for opportunistic same-day filler work,
+                # but it left normal/low tickets unplanned even when day 2 or day 3
+                # still had capacity. Hard feasibility below still protects SLA,
+                # workday, skill, lunch-break and daily non-urgent capacity rules.
                 if best is None or insertion.score_delta < best.score_delta:
                     best = insertion
         return best

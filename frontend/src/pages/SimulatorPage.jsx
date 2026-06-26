@@ -9,18 +9,17 @@ import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
 import { Tag } from '../components/Tag';
 import { toUrgencyApiValue, toUrgencyLabel } from '../utils/status';
-import { injectionRows } from '../data/simulatorData';
 
-const fallbackInjections = injectionRows.map((row) => ({
-  inject_time: row[0], id: row[1], urgency: toUrgencyApiValue(row[2]),
-  requires_ladder: row[3] === '✓', requires_spring: row[4] === '✓', subject: row[5], address: row[6], status: row[7],
-}));
-
-const fallbackState = {
-  scenario: 'Normale dag', current_time: '10:30', speed: 5, status: 'Gepauzeerd',
-  stats: { tickets_in_scenario: 28, not_injected: 16, injected_today: 7, last_injection: '10:15' },
-  activity_log: [{ time: '08:05', message: 'Ticket T-001 ingeschoten', actor: 'Admin' }, { time: '10:15', message: 'Ticket T-007 ingeschoten', actor: 'Admin' }],
+const emptySimulatorState = {
+  scenario: '',
+  current_time: '-',
+  speed: 1,
+  status: 'Onbekend',
+  stats: { tickets_in_scenario: 0, not_injected: 0, injected_today: 0, last_injection: '-' },
+  activity_log: [],
 };
+
+const emptyScenarios = [];
 
 function SimulatorToolbar({ scenarios, selectedScenarioId, onScenarioChange, onGenerate, state, onToggleSimulation, onStop, onSpeedChange }) {
   const scenarioOptions = scenarios.map((scenario) => ({ value: scenario.id, label: scenario.name }));
@@ -292,13 +291,13 @@ export function SimulatorPage() {
   const loadState = useCallback(() => api.getSimulatorState(), []);
   const loadInjections = useCallback(() => api.getInjections(), []);
   const loadScenarios = useCallback(() => api.getScenarios(), []);
-  const { data: state, loading, error, reload: reloadState } = useApi(loadState, fallbackState);
-  const { data: injections, reload: reloadInjections } = useApi(loadInjections, fallbackInjections);
-  const { data: scenarios } = useApi(loadScenarios, [{ id: 'normale_dag', name: 'Normale dag' }]);
-  const [selectedScenarioId, setSelectedScenarioId] = useState('normale_dag');
+  const { data: state, loading, error, reload: reloadState } = useApi(loadState, emptySimulatorState);
+  const { data: injections, reload: reloadInjections } = useApi(loadInjections, []);
+  const { data: scenarios } = useApi(loadScenarios, emptyScenarios);
+  const [selectedScenarioId, setSelectedScenarioId] = useState('');
   const [filters, setFilters] = useState({ urgency: 'all', requirement: 'Alle requirements' });
   const [editingTicket, setEditingTicket] = useState(null);
-  const scenarioList = useMemo(() => scenarios?.length ? scenarios : [{ id: 'normale_dag', name: 'Normale dag' }], [scenarios]);
+  const scenarioList = useMemo(() => scenarios || [], [scenarios]);
   const simulationIsRunning = isSimulationRunning(state?.status);
 
   const refresh = useCallback(async (options = {}) => {
@@ -317,7 +316,7 @@ export function SimulatorPage() {
   }, [simulationIsRunning]);
 
   const filteredInjections = useMemo(() => (injections || []).filter((row) => matchesFilter(row, filters)), [injections, filters]);
-  const stats = state.stats || fallbackState.stats;
+  const stats = state.stats || emptySimulatorState.stats;
   const saveSimulationTicket = async (payload) => {
     if (editingTicket) {
       await runAction(() => api.updateInjection(editingTicket.database_id || editingTicket.id, payload));

@@ -8,39 +8,13 @@ import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
 import { JobRequirementIcon } from '../components/Requirements';
 import { Ladder } from '../icons/Ladder';
-import { planningColumns, technicians, timelineTimes } from '../data/planningData';
 
 const MIN_VISIBLE_TRAVEL_MINUTES = 5;
 
-const fallbackPlanning = {
-  has_plan: true,
-  stats: { total_today: 23, planned: 23, urgent_open: 3, kilometers: 268, travel_minutes: 375, free_minutes: 150 },
-  columns: technicians.map((name, index) => ({
-    technician: { id: `m${index + 1}`, name, can_use_ladder: true, can_use_spring: index !== 0 },
-    timeline_start_at: '2026-06-26T08:00:00',
-    timeline_end_at: '2026-06-26T17:00:00',
-    hour_ticks: timelineTimes,
-    items: planningColumns[index].map(([title, address, time, duration, tone, requirement], itemIndex) => ({
-      id: `${index}-${itemIndex}`,
-      ticket_display_id: `T-${String(index * 20 + itemIndex + 1).padStart(3, '0')}`,
-      title,
-      subject: title,
-      address,
-      start: time?.split(' - ')[0] || '',
-      end: time?.split(' - ')[1] || '',
-      start_at: time?.split(' - ')[0] || '',
-      end_at: time?.split(' - ')[1] || '',
-      duration_minutes: parseInt(duration, 10) || 30,
-      urgency: tone === 'urgent' ? 'URGENT' : tone === 'low' ? 'LOW' : tone === 'normal' ? 'MEDIUM' : null,
-      status: tone === 'travel' || tone === 'break' ? '' : 'PLANNED',
-      type: tone === 'travel' ? 'TRAVEL' : tone === 'break' ? 'BREAK' : 'TICKET',
-      display_variant: tone === 'travel' ? 'travel' : tone === 'break' ? 'break' : 'ticket',
-      color_hint: tone === 'travel' ? 'grey' : tone,
-      requires_ladder: requirement === 'Ladder',
-      requires_spring: requirement === 'Waves',
-      characteristics: [requirement].filter(Boolean),
-    })),
-  })),
+const emptyPlanning = {
+  has_plan: false,
+  stats: { total_today: 0, planned: 0, urgent_open: 0, kilometers: 0, travel_minutes: 0, free_minutes: 0 },
+  columns: [],
 };
 
 function parseDateTime(value, fallbackDate) {
@@ -219,7 +193,7 @@ function TechnicianColumn({ column }) {
 
 export function PlanningPage() {
   const loadPlanning = useCallback(() => api.getPlanning(), []);
-  const { data: planning, loading, error, reload } = useApi(loadPlanning, fallbackPlanning);
+  const { data: planning, loading, error, reload } = useApi(loadPlanning, emptyPlanning);
   const [planningActionLoading, setPlanningActionLoading] = useState(false);
 
   const runAction = async (action) => {
@@ -234,7 +208,7 @@ export function PlanningPage() {
     }
   };
 
-  const stats = planning.stats || fallbackPlanning.stats;
+  const stats = planning.stats || emptyPlanning.stats;
   const hasPlan = Boolean(planning.has_plan);
   const columns = useMemo(() => (planning.columns || []).map(normalizeColumn), [planning.columns]);
   const planButtonDisabled = planningActionLoading || loading;

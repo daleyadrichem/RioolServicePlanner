@@ -10,20 +10,15 @@ import { StatCard } from '../components/StatCard';
 import { Tag } from '../components/Tag';
 import { Ladder } from '../icons/Ladder';
 import { toUrgencyApiValue } from '../utils/status';
-import { tickets as fallbackRows } from '../data/ticketsData';
 
-const fallbackTickets = fallbackRows.map((row) => ({
-  id: row[0], database_id: String(row[0]).replace(/\D/g, ''), branch_id: '', branch_name: 'Branch Den Bosch', subject: row[1], address: row[2], created_at: row[3], urgency: toUrgencyApiValue(row[4]),
-  requires_ladder: row[5].includes('ladder'), requires_spring: row[5].includes('waves'),
-  status: row[6], technician_name: row[7] === 'Nog niet toegewezen' ? null : row[7], description: 'Mock ticket uit de frontend fallback data.',
-}));
-
-const fallbackStats = {
-  open: fallbackTickets.filter((t) => !['Afgerond', 'COMPLETED', 'completed'].includes(t.status)).length,
-  urgent_open: fallbackTickets.filter((t) => toUrgencyApiValue(t.urgency) === 'urgent' && !['Afgerond', 'COMPLETED', 'completed'].includes(t.status)).length,
-  unplanned: fallbackTickets.filter((t) => !t.technician_name && !['Afgerond', 'COMPLETED', 'completed'].includes(t.status)).length,
-  finished: fallbackTickets.filter((t) => ['Afgerond', 'COMPLETED', 'completed'].includes(t.status)).length,
+const emptyStats = {
+  open: 0,
+  urgent_open: 0,
+  unplanned: 0,
+  finished: 0,
 };
+
+const emptyBranches = [];
 
 const urgencyOptions = [
   { value: 'all', label: 'Alle' },
@@ -54,8 +49,6 @@ const editableStatusOptions = [
   { value: 'completed', label: 'Afgerond' },
   { value: 'cancelled', label: 'Geannuleerd' },
 ];
-
-const fallbackBranches = [{ id: '', name: 'Branch Den Bosch' }];
 
 const emptyTicketForm = {
   branch_id: '',
@@ -401,11 +394,11 @@ export function TicketsPage() {
   const loadStats = useCallback(() => api.getTicketStatistics(), []);
   const loadBranches = useCallback(() => api.getBranches(), []);
   const loadTechnicians = useCallback(() => api.getTechnicians(), []);
-  const { data: tickets, loading, error, reload } = useApi(loadTickets, fallbackTickets);
-  const { data: stats, reload: reloadStats } = useApi(loadStats, fallbackStats);
-  const { data: branches } = useApi(loadBranches, fallbackBranches);
+  const { data: tickets, loading, error, reload } = useApi(loadTickets, []);
+  const { data: stats, reload: reloadStats } = useApi(loadStats, emptyStats);
+  const { data: branches } = useApi(loadBranches, emptyBranches);
   const { data: technicians } = useApi(loadTechnicians, []);
-  const [selectedId, setSelectedId] = useState(ticketKey(fallbackTickets[0]));
+  const [selectedId, setSelectedId] = useState(null);
   const [modalState, setModalState] = useState({ mode: null, ticket: null });
 
   const refresh = useCallback(async (options = {}) => {

@@ -8,80 +8,7 @@ import { StatCard } from '../components/StatCard';
 import { ServiceMap } from '../components/map/ServiceMap';
 import { useApi } from '../hooks/useApi';
 
-const fallbackMapOverview = {
-  hq: [
-    {
-      id: 1,
-      name: 'Branch Den Bosch',
-      address: 'Den Bosch centrum',
-      latitude: 51.6978,
-      longitude: 5.3037,
-    },
-  ],
-  mechanics: [
-    {
-      id: 1,
-      name: 'Monteur Bas',
-      status: 'ACTIVE',
-      address: 'Startlocatie Den Bosch',
-      latitude: 51.7042,
-      longitude: 5.3166,
-      current_location_source: 'start_location',
-      requirements: ['LADDER', 'VEER'],
-    },
-  ],
-  tickets: [
-    {
-      id: 101,
-      display_id: 'T-101',
-      subject: 'Verstopping keukenafvoer',
-      urgency: 'URGENT',
-      status: 'PLANNED',
-      address: 'Vughterstraat, Den Bosch',
-      latitude: 51.6898,
-      longitude: 5.3001,
-      technician_name: 'Monteur Bas',
-      planned_start_at: '2026-06-26T09:15:00',
-      planned_end_at: '2026-06-26T10:15:00',
-      requirements: ['VEER'],
-    },
-    {
-      id: 102,
-      display_id: 'T-102',
-      subject: 'Rioollucht badkamer',
-      urgency: 'MEDIUM',
-      status: 'PLANNED',
-      address: 'Rompertpassage, Den Bosch',
-      latitude: 51.7156,
-      longitude: 5.3192,
-      technician_name: 'Monteur Bas',
-      planned_start_at: '2026-06-26T11:00:00',
-      planned_end_at: '2026-06-26T12:00:00',
-      requirements: [],
-    },
-  ],
-  routes: [
-    {
-      technician_id: 1,
-      technician_name: 'Monteur Bas',
-      geometry_type: 'straight_line',
-      ticket_ids: [101, 102],
-      coordinates: [
-        [51.7042, 5.3166],
-        [51.6898, 5.3001],
-        [51.7156, 5.3192],
-        [51.7042, 5.3166],
-      ],
-      stops: [],
-    },
-  ],
-  meta: {
-    route_geometry: 'straight_line',
-    ticket_count: 2,
-    mechanic_count: 1,
-    route_count: 1,
-  },
-};
+const emptyMapOverview = { hq: [], mechanics: [], tickets: [], routes: [], meta: {} };
 
 function routeGeometryLabel(value) {
   if (value === 'straight_line') return 'rechte lijnen';
@@ -91,7 +18,7 @@ function routeGeometryLabel(value) {
 
 export function MapPage() {
   const loadMapOverview = useCallback(() => api.getMapOverview(), []);
-  const { data, loading, error, reload } = useApi(loadMapOverview, fallbackMapOverview);
+  const { data, loading, error, reload } = useApi(loadMapOverview, emptyMapOverview);
   const meta = data?.meta || {};
 
   return (
