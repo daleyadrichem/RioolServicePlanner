@@ -520,16 +520,10 @@ body.waitingCursor * {
 .serviceMapIcon.ticket.medium span{background:#ff8b00;}
 .serviceMapIcon.ticket.low span{background:#17944b;}
 .serviceRouteLine{
-  stroke:#0f67ff;
-  stroke-width:4px;
-  stroke-opacity:.7;
   stroke-dasharray:8 8;
 }
 .routeStopMarker{
-  fill:#0f67ff;
-  fill-opacity:.16;
-  stroke:#0f67ff;
-  stroke-width:2px;
+  pointer-events:auto;
 }
 .mapPopup{
   display:flex;

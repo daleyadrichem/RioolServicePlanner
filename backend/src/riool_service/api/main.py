@@ -85,9 +85,12 @@ class InitialPlanningPayload(BaseModel):
     max_candidates_per_technician: int = 0
     requirement_pickup_duration_minutes: int = 5
     initial_non_urgent_minutes_per_technician: int = 360
-    initial_route_work_minutes_per_technician: int = 330
+    initial_route_work_minutes_per_technician: int = 360
+    latest_ticket_start_route_work_minutes: int = 300
     travel_penalty_per_minute: int = 25
     planning_horizon_days: int = 3
+    defer_to_day_2_penalty_minutes: int = 45
+    defer_to_day_3_penalty_minutes: int = 120
     default_service_minutes: int = 60
     multi_start_iterations: int = 40
     local_search_iterations: int = 250

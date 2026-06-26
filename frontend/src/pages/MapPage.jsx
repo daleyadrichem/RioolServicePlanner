@@ -1,14 +1,31 @@
 import { CalendarDays, ChevronLeft, ChevronRight, Loader2, MapPinned, RefreshCw, Route, Ticket, UserRound } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { ApiNotice } from '../components/ApiNotice';
 import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
-import { ServiceMap } from '../components/map/ServiceMap';
+import { routeColor, routesWithColors, ServiceMap } from '../components/map/ServiceMap';
 import { useApi } from '../hooks/useApi';
 
 const emptyMapOverview = { hq: [], mechanics: [], tickets: [], routes: [], meta: {} };
+
+function ticketKey(ticket) {
+  return ticket?.id ?? ticket?.database_id ?? ticket?.display_id;
+}
+
+function mergeTicketMarkers(overviews) {
+  const merged = new Map();
+  overviews.forEach((overview) => {
+    (overview?.tickets || []).forEach((ticket) => {
+      const key = ticketKey(ticket);
+      if (key == null) return;
+      merged.set(String(key), ticket);
+    });
+  });
+  return Array.from(merged.values());
+}
+
 
 function parseDateTime(value) {
   if (!value) return null;
@@ -40,12 +57,51 @@ export function MapPage() {
   const [selectedDate, setSelectedDate] = useState(null);
   const loadMapOverview = useCallback(() => api.getMapOverview(null, selectedDate), [selectedDate]);
   const { data, loading, error, reload } = useApi(loadMapOverview, emptyMapOverview);
+  const [allTicketMarkers, setAllTicketMarkers] = useState([]);
+  const [ticketLoadError, setTicketLoadError] = useState('');
   const meta = data?.meta || {};
   const availableDates = useMemo(() => data?.available_dates || meta.available_dates || [], [data?.available_dates, meta.available_dates]);
   const activeDate = selectedDate || isoDate(data?.planned_date || meta.planned_date) || availableDates[0] || null;
   const activeDateIndex = availableDates.indexOf(activeDate);
   const canGoPrevious = activeDateIndex > 0;
   const canGoNext = activeDateIndex >= 0 && activeDateIndex < availableDates.length - 1;
+  const coloredRoutes = useMemo(() => routesWithColors(data?.routes || []), [data?.routes]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTicketsForAllPlanningDays() {
+      if (!availableDates.length) {
+        setAllTicketMarkers(data?.tickets || []);
+        setTicketLoadError('');
+        return;
+      }
+
+      try {
+        setTicketLoadError('');
+        const overviews = await Promise.all(availableDates.map((date) => api.getMapOverview(null, date)));
+        if (!cancelled) setAllTicketMarkers(mergeTicketMarkers(overviews));
+      } catch {
+        if (!cancelled) {
+          setAllTicketMarkers(data?.tickets || []);
+          setTicketLoadError('Niet alle ticketdagen konden worden geladen. De kaart toont tijdelijk alleen tickets van de gekozen dag.');
+        }
+      }
+    }
+
+    loadTicketsForAllPlanningDays();
+    return () => { cancelled = true; };
+  }, [availableDates, data?.tickets]);
+
+  const mapData = useMemo(() => ({
+    ...data,
+    tickets: allTicketMarkers.length ? allTicketMarkers : data?.tickets || [],
+    routes: coloredRoutes,
+    meta: {
+      ...(data?.meta || {}),
+      ticket_count: allTicketMarkers.length || data?.tickets?.length || 0,
+    },
+  }), [allTicketMarkers, coloredRoutes, data]);
 
   const selectRelativeDay = (offset) => {
     const nextDate = availableDates[activeDateIndex + offset];
@@ -63,13 +119,14 @@ export function MapPage() {
       </PageHeader>
 
       <div className="stats four mapStats">
-        <StatCard icon={Ticket} label="Tickets op kaart" value={meta.ticket_count ?? data?.tickets?.length ?? 0} tone="blue" />
+        <StatCard icon={Ticket} label="Tickets op kaart" value={mapData.meta.ticket_count ?? mapData.tickets?.length ?? 0} tone="blue" />
         <StatCard icon={UserRound} label="Monteurs" value={meta.mechanic_count ?? data?.mechanics?.length ?? 0} tone="green" />
         <StatCard icon={Route} label="Routes" value={meta.route_count ?? data?.routes?.length ?? 0} tone="orange" />
         <StatCard icon={MapPinned} label="Route geometrie" value={routeGeometryLabel(meta.route_geometry)} tone="purple" />
       </div>
 
       <ApiNotice error={error} />
+      <ApiNotice error={ticketLoadError} />
 
       {availableDates.length > 0 && (
         <section className="planningDateSelector" aria-label="Kaart dag kiezen">
@@ -93,17 +150,23 @@ export function MapPage() {
         <div className="mapHeader">
           <div>
             <h2>Servicegebied en planning</h2>
-            <p>HQ, ticketlocaties, monteurpositie en geplande route voor de gekozen dag.</p>
+            <p>Routes blijven op de gekozen dag; ticketlocaties tonen alle beschikbare planningsdagen.</p>
           </div>
           <div className="mapLegend">
             <span><i className="legendDot hq" /> HQ</span>
-            <span><i className="legendDot mechanic" /> Monteur</span>
+            {mapData.routes?.length > 0
+              ? mapData.routes.map((route, index) => (
+                <span key={`route-legend-${route.technician_id || route.technician_name}`}>
+                  <i className="legendDot route" style={{ background: routeColor(route, index) }} /> {route.technician_name}
+                </span>
+              ))
+              : <span><i className="legendDot mechanic" /> Monteur</span>}
             <span><i className="legendDot urgent" /> Spoed</span>
             <span><i className="legendDot medium" /> Normaal</span>
             <span><i className="legendDot low" /> Laag</span>
           </div>
         </div>
-        <ServiceMap data={data} />
+        <ServiceMap data={mapData} />
       </section>
     </main>
   );

@@ -824,10 +824,19 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
         initial_route_work_minutes_per_technician=int(
             payload.get("initial_route_work_minutes_per_technician")
             or payload.get("initial_planned_minutes_per_technician")
-            or 330
+            or 360
+        ),
+        latest_ticket_start_route_work_minutes=int(
+            payload.get("latest_ticket_start_route_work_minutes") or 300
         ),
         travel_penalty_per_minute=int(payload.get("travel_penalty_per_minute") or 25),
         planning_horizon_days=max(1, int(payload.get("planning_horizon_days") or 3)),
+        defer_to_day_2_penalty_minutes=int(
+            payload.get("defer_to_day_2_penalty_minutes") or 45
+        ),
+        defer_to_day_3_penalty_minutes=int(
+            payload.get("defer_to_day_3_penalty_minutes") or 120
+        ),
         default_service_minutes=int(payload.get("default_service_minutes") or 60),
         multi_start_iterations=int(payload.get("multi_start_iterations") or 40),
         local_search_iterations=int(payload.get("local_search_iterations") or 250),
@@ -865,10 +874,18 @@ def _build_horizon_plan(
     for day_index in range(max(1, config.planning_horizon_days)):
         if not remaining_by_id and day_index > 0:
             break
+        if day_index == 0:
+            defer_unplanned_penalty_minutes = config.defer_to_day_2_penalty_minutes
+        elif day_index == 1:
+            defer_unplanned_penalty_minutes = config.defer_to_day_3_penalty_minutes
+        else:
+            defer_unplanned_penalty_minutes = 0
+
         day_config = replace(
             config,
             planned_date=config.planned_date + timedelta(days=day_index),
             random_seed=(config.random_seed + day_index if isinstance(config.random_seed, int) else config.random_seed),
+            defer_unplanned_penalty_minutes=defer_unplanned_penalty_minutes,
         )
         remaining_tickets = sorted(
             remaining_by_id.values(),
@@ -904,7 +921,143 @@ def _build_horizon_plan(
             }
         )
 
+
+    _pull_forward_deferred_tickets(config, day_plans)
     return day_plans
+
+
+def _defer_penalty_minutes_for_day(config: PlanningConfig, day_index: int) -> int:
+    if day_index <= 0:
+        return 0
+    if day_index == 1:
+        return max(0, config.defer_to_day_2_penalty_minutes)
+    return max(0, config.defer_to_day_3_penalty_minutes)
+
+
+def _planned_ticket_ids(solution: PlanningSolution) -> set[int]:
+    return {
+        ticket_id
+        for route in solution.routes.values()
+        for ticket_id in route.ticket_ids
+    }
+
+
+def _remove_ticket_from_solution(solution: PlanningSolution, ticket_id: int) -> None:
+    for route in solution.routes.values():
+        route.ticket_ids = [current_id for current_id in route.ticket_ids if current_id != ticket_id]
+
+
+def _remove_ticket_from_optimizer_scope(optimizer: InitialRouteOptimizer, ticket_id: int) -> None:
+    # Once a ticket has been pulled into an earlier day, later day optimizers
+    # should no longer count it as an unplanned ticket in their own score/output.
+    optimizer.tickets = [ticket for ticket in optimizer.tickets if ticket.id != ticket_id]
+    optimizer.ticket_by_id.pop(ticket_id, None)
+
+
+def _best_forward_insertion(
+    optimizer: InitialRouteOptimizer,
+    solution: PlanningSolution,
+    ticket: Any,
+):
+    best = None
+    for technician_id, route in solution.routes.items():
+        if not optimizer._can_do(route.technician, ticket):
+            continue
+        for position in range(len(route.ticket_ids) + 1):
+            insertion = optimizer._evaluate_insertion(solution, route, ticket, position)
+            if insertion is None:
+                continue
+            if best is None or insertion.extra_travel_minutes < best.extra_travel_minutes:
+                best = insertion
+    return best
+
+
+def _pull_forward_deferred_tickets(config: PlanningConfig, day_plans: list[dict[str, Any]]) -> None:
+    """Move later-day tickets into earlier days when the deferral penalty pays for it.
+
+    The initial horizon builder plans day 1, then day 2, then day 3 greedily.
+    That keeps the implementation simple, but it also means a high day-deferral
+    penalty does not directly compete with route efficiency across days. This
+    repair pass applies that cross-day preference explicitly: if a ticket is on
+    day 2 or day 3 and it can fit on an earlier day, pull it forward whenever
+    the added travel is less than the deferral penalty saved.
+    """
+    if len(day_plans) < 2:
+        return
+
+    changed = True
+    while changed:
+        changed = False
+        for later_index in range(1, len(day_plans)):
+            later_plan = day_plans[later_index]
+            later_optimizer: InitialRouteOptimizer = later_plan["optimizer"]
+            later_solution: PlanningSolution = later_plan["solution"]
+            later_ticket_ids = list(_planned_ticket_ids(later_solution))
+            later_ticket_ids.sort(
+                key=lambda ticket_id: (
+                    later_optimizer.ticket_by_id[ticket_id].urgency_rank,
+                    later_optimizer.ticket_by_id[ticket_id].deadline_at,
+                    later_optimizer.ticket_by_id[ticket_id].created_at,
+                    ticket_id,
+                )
+                if ticket_id in later_optimizer.ticket_by_id
+                else (99, datetime.max, datetime.max, ticket_id)
+            )
+
+            for ticket_id in later_ticket_ids:
+                ticket = later_optimizer.ticket_by_id.get(ticket_id)
+                if ticket is None:
+                    continue
+
+                later_penalty = _defer_penalty_minutes_for_day(config, later_index)
+                for target_index in range(0, later_index):
+                    target_penalty = _defer_penalty_minutes_for_day(config, target_index)
+                    saved_penalty_minutes = max(0, later_penalty - target_penalty)
+                    if saved_penalty_minutes <= 0:
+                        continue
+
+                    target_plan = day_plans[target_index]
+                    target_optimizer: InitialRouteOptimizer = target_plan["optimizer"]
+                    target_solution: PlanningSolution = target_plan["solution"]
+                    if ticket_id in _planned_ticket_ids(target_solution):
+                        break
+
+                    insertion = _best_forward_insertion(target_optimizer, target_solution, ticket)
+                    if insertion is None:
+                        continue
+
+                    # The penalty is configured in equivalent travel minutes, so
+                    # compare directly to the extra travel caused by pulling the
+                    # ticket forward. Route order within the day still picks the
+                    # cheapest feasible insertion.
+                    if insertion.extra_travel_minutes > saved_penalty_minutes:
+                        continue
+
+                    target_solution.routes[insertion.technician_id].ticket_ids.insert(
+                        insertion.position,
+                        ticket_id,
+                    )
+                    # Remove this ticket from every later plan scope. Intermediate
+                    # days may only know it as "unplanned", but they must stop
+                    # scoring it after it has been scheduled earlier.
+                    for cleanup_index in range(target_index + 1, len(day_plans)):
+                        cleanup_plan = day_plans[cleanup_index]
+                        cleanup_solution: PlanningSolution = cleanup_plan["solution"]
+                        cleanup_optimizer: InitialRouteOptimizer = cleanup_plan["optimizer"]
+                        _remove_ticket_from_solution(cleanup_solution, ticket_id)
+                        _remove_ticket_from_optimizer_scope(cleanup_optimizer, ticket_id)
+                        cleanup_plan["planned_ticket_ids"] = _planned_ticket_ids(cleanup_solution)
+                        cleanup_optimizer._score(cleanup_solution)
+
+                    target_plan["planned_ticket_ids"] = _planned_ticket_ids(target_solution)
+                    target_optimizer._score(target_solution)
+                    changed = True
+                    break
+
+                if changed:
+                    break
+            if changed:
+                break
 
 
 def _horizon_summary(day_plans: list[dict[str, Any]], all_tickets: list[Any]) -> dict[str, Any]:
@@ -973,10 +1126,13 @@ def _horizon_solution_as_dict(config: PlanningConfig, day_plans: list[dict[str, 
         "planning_horizon_days": config.planning_horizon_days,
         "planned_service_minutes_per_technician_per_day": config.initial_non_urgent_minutes_per_technician,
         "planned_route_work_minutes_per_technician_per_day": config.initial_route_work_minutes_per_technician,
+        "latest_ticket_start_route_work_minutes": config.latest_ticket_start_route_work_minutes,
         "reserved_urgent_minutes_per_technician_per_day": max(
             0, 8 * 60 - config.initial_route_work_minutes_per_technician
         ),
         "travel_penalty_per_minute": config.travel_penalty_per_minute,
+        "defer_to_day_2_penalty_minutes": config.defer_to_day_2_penalty_minutes,
+        "defer_to_day_3_penalty_minutes": config.defer_to_day_3_penalty_minutes,
         "multi_start_iterations": config.multi_start_iterations,
         "local_search_iterations": config.local_search_iterations,
         "random_seed": config.random_seed,
@@ -1075,24 +1231,32 @@ def _solution_as_dict(
             "planned_route_work_minutes_per_technician": (
                 config.initial_route_work_minutes_per_technician
             ),
+            "latest_ticket_start_route_work_minutes": (
+                config.latest_ticket_start_route_work_minutes
+            ),
             "travel_penalty_per_minute": config.travel_penalty_per_minute,
+            "defer_unplanned_penalty_minutes": config.defer_unplanned_penalty_minutes,
             "penalty_weights": {
-                "sla_miss": 1_000_000,
-                "unplanned_urgent": 750_000,
-                "unplanned_medium": 250_000,
-                "unplanned_low": 20_000,
+                "sla_miss": 1_000_000_000,
+                "unplanned_base_per_ticket": 1_000_000,
+                "unplanned_urgent_tiebreaker": 1_500,
+                "unplanned_medium_tiebreaker": 0,
+                "unplanned_low_tiebreaker": 0,
                 "overtime_per_minute": 500,
                 "travel_per_minute": config.travel_penalty_per_minute,
+                "defer_unplanned_per_ticket": (
+                    config.defer_unplanned_penalty_minutes * config.travel_penalty_per_minute
+                ),
             },
         },
         "design_choices": [
             "Multiple randomized start plans are tried to avoid all nearby-home mechanics staying in the same area.",
             "Each start plan is improved with move, swap and reorder operations.",
-            "Low-priority tickets are added only when they fit well and do not cause SLA/workday issues.",
+            "All feasible tickets in the 3-day horizon are added; low priority is not treated as optional filler work.",
             "Every mechanic gets a 45 minute break planned inside the 11:00-13:00 window.",
             "A mechanic with one or more required items on the route gets one HQ pickup before the first required ticket.",
             "Travel and break blocks are returned as explicit timeline items, instead of appearing as gaps between tickets.",
-            "Urgent and earliest-deadline tickets are protected first.",
+            "Urgent and earliest-deadline tickets are protected by hard SLA feasibility first; urgency is otherwise only a small tie-breaker.",
         ],
         "routes": routes,
         "unplanned_tickets": unplanned,

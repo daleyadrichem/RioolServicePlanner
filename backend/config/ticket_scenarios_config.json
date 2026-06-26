@@ -13,8 +13,8 @@
         "ladder": 20,
         "veer": 35
       },
-      "aantal_tickets_min": 35,
-      "aantal_tickets_max": 45,
+      "aantal_tickets_min": 30,
+      "aantal_tickets_max": 40,
       "gemiddelde_ticket_duur_minuten": 60,
       "radius_km": 30,
       "reserve_uren_voor_spoed": 2,
@@ -40,8 +40,8 @@
         "ladder": 20,
         "veer": 35
       },
-      "aantal_tickets_min": 35,
-      "aantal_tickets_max": 45,
+      "aantal_tickets_min": 30,
+      "aantal_tickets_max": 40,
       "gemiddelde_ticket_duur_minuten": 60,
       "radius_km": 30,
       "reserve_uren_voor_spoed": 3,
@@ -72,8 +72,8 @@
         "ladder": 60,
         "veer": 25
       },
-      "aantal_tickets_min": 35,
-      "aantal_tickets_max": 45,
+      "aantal_tickets_min": 30,
+      "aantal_tickets_max": 40,
       "gemiddelde_ticket_duur_minuten": 60,
       "radius_km": 30,
       "reserve_uren_voor_spoed": 2,

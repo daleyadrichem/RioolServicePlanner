@@ -6,12 +6,22 @@ import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip
 
 const DEFAULT_CENTER = [51.6978, 5.3037];
 const DEFAULT_ZOOM = 11;
-const ROUTE_COLORS = ['#0f67ff', '#f97316', '#16a34a', '#7c3aed', '#dc2626', '#0891b2', '#ca8a04', '#db2777'];
+export const ROUTE_COLORS = ['#0f67ff', '#f97316', '#16a34a', '#7c3aed', '#dc2626', '#0891b2', '#ca8a04', '#db2777'];
 
-function routeColor(route, index) {
-  const numericId = Number(route?.technician_id);
-  const paletteIndex = Number.isFinite(numericId) ? Math.abs(numericId) % ROUTE_COLORS.length : index % ROUTE_COLORS.length;
-  return ROUTE_COLORS[paletteIndex];
+function routeKey(route) {
+  return route?.technician_id ?? route?.technician_name ?? '';
+}
+
+export function routeColor(route, index) {
+  return route?.color || ROUTE_COLORS[index % ROUTE_COLORS.length];
+}
+
+export function routesWithColors(routes = []) {
+  return routes.map((route, index) => ({
+    ...route,
+    color: routeColor(route, index),
+    color_key: routeKey(route),
+  }));
 }
 
 function isFiniteCoordinate(latitude, longitude) {
@@ -34,7 +44,15 @@ function createDivIcon(className, label) {
 }
 
 const hqIcon = createDivIcon('hq', 'HQ');
-const mechanicIcon = createDivIcon('mechanic', 'M');
+function mechanicIcon(color) {
+  return L.divIcon({
+    className: 'serviceMapIcon mechanic',
+    html: `<span style="background:${color}">M</span>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    popupAnchor: [0, -17],
+  });
+}
 
 function ticketIcon(ticket) {
   const urgency = String(ticket.urgency || '').toLowerCase();
@@ -108,7 +126,7 @@ export function ServiceMap({ data }) {
   const hq = data?.hq || [];
   const tickets = data?.tickets || [];
   const mechanics = data?.mechanics || [];
-  const routes = data?.routes || [];
+  const routes = useMemo(() => routesWithColors(data?.routes || []), [data?.routes]);
 
   const boundsPoints = useMemo(() => {
     const markerPoints = [
@@ -132,7 +150,7 @@ export function ServiceMap({ data }) {
             key={`route-${route.technician_id}`}
             positions={route.coordinates || []}
             className="serviceRouteLine"
-            pathOptions={{ color }}
+            pathOptions={{ color, weight: 4, opacity: 0.7, dashArray: '8 8' }}
           >
             <Tooltip sticky>{route.technician_name} · {route.ticket_ids?.length || 0} tickets</Tooltip>
           </Polyline>
@@ -162,8 +180,10 @@ export function ServiceMap({ data }) {
       {mechanics.map((mechanic) => {
         const position = pointToLatLng(mechanic);
         if (!position) return null;
+        const routeIndex = routes.findIndex((route) => String(route.technician_id) === String(mechanic.id));
+        const color = routeIndex >= 0 ? routeColor(routes[routeIndex], routeIndex) : ROUTE_COLORS[0];
         return (
-          <Marker key={`mechanic-${mechanic.id}`} position={position} icon={mechanicIcon}>
+          <Marker key={`mechanic-${mechanic.id}`} position={position} icon={mechanicIcon(color)}>
             <Popup><MechanicPopup mechanic={mechanic} /></Popup>
           </Marker>
         );
@@ -174,7 +194,7 @@ export function ServiceMap({ data }) {
         const position = pointToLatLng(stop);
         if (!position) return null;
         return (
-          <CircleMarker key={`stop-${stop.assignment_id || index}`} center={position} radius={12} className="routeStopMarker" pathOptions={{ color, fillColor: color }}>
+          <CircleMarker key={`stop-${stop.assignment_id || index}`} center={position} radius={12} className="routeStopMarker" pathOptions={{ color, fillColor: color, weight: 2, fillOpacity: 0.16 }}>
             <Tooltip>{stop.sequence_order}. {stop.label}</Tooltip>
           </CircleMarker>
         );

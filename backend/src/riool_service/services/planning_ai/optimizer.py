@@ -20,12 +20,18 @@ from riool_service.services.planning_ai.models import (
 )
 from riool_service.services.planning_ai.selection import planning_day_end, planning_day_start
 
-SLA_MISS_PENALTY = 1_000_000
-UNPLANNED_PENALTY_BY_URGENCY = {
-    TicketUrgency.URGENT: 750_000,
-    TicketUrgency.MEDIUM: 250_000,
-    TicketUrgency.LOW: 20_000,
+SLA_MISS_PENALTY = 1_000_000_000
+# A 3-day initial plan should strongly prefer getting every feasible ticket onto
+# the board. This base penalty is intentionally urgency-neutral: once SLA rules
+# are respected, leaving a low ticket unplanned is still bad because it makes the
+# next planning run harder. Urgency only adds a small tie-breaker below.
+UNPLANNED_TICKET_PENALTY = 1_000_000
+UNPLANNED_URGENCY_TIEBREAKER = {
+    TicketUrgency.URGENT: 1_500,
+    TicketUrgency.MEDIUM: 0,
+    TicketUrgency.LOW: 0,
 }
+TICKET_COMPLETION_REWARD = UNPLANNED_TICKET_PENALTY
 OVERTIME_PENALTY_PER_MINUTE = 500
 
 
@@ -77,11 +83,12 @@ class InitialRouteOptimizer:
         best.algorithm_notes = [
             "Multi-start randomized cheapest insertion",
             "Local search with move, swap and 2-opt reorder operators",
-            "Low-priority tickets are only inserted when feasible and route-fit is good",
+            "All feasible tickets in the 3-day horizon are inserted; urgency is only a small tie-breaker after SLA feasibility.",
             "A 45 minute break is planned for every mechanic inside the 11:00-13:00 window",
             "If a route contains tickets with requirements, a single HQ pickup is inserted before the first required ticket.",
             "Initial route workload is capped using service + travel + HQ pickup time, so urgent-ticket capacity remains free.",
             "Every minute of travel, including HQ detours and return-home travel, is penalized equally in the score.",
+            "Among plans with the same number of unplanned tickets and SLA misses, travel time dominates urgency tie-breakers.",
         ]
         return best
 
@@ -334,10 +341,34 @@ class InitialRouteOptimizer:
         new_travel, new_distance = self._route_travel_and_distance(candidate_route)
         extra_travel = new_travel - old_travel
         extra_distance = new_distance - old_distance
+        old_route_work = self._route_work_minutes(
+            self._route_timeline(route, include_return_home=True) or []
+        )
+        new_route_work = self._route_work_minutes(
+            self._route_timeline(candidate_route, include_return_home=True) or []
+        )
+        extra_route_work_overflow_penalty = (
+            self._route_work_overflow_penalty_points(new_route_work)
+            - self._route_work_overflow_penalty_points(old_route_work)
+        )
 
-        priority_bonus = UNPLANNED_PENALTY_BY_URGENCY[ticket.urgency]
+        # Insertion should mostly answer: can we place one more feasible ticket
+        # without too much extra route work? The completion reward makes it very
+        # attractive to get tickets off the board, while the urgency tie-breaker
+        # is deliberately small so medium-vs-low priority does not swamp travel.
         travel_penalty = max(0, self.config.travel_penalty_per_minute)
-        score_delta = extra_travel * travel_penalty + ticket.service_minutes - priority_bonus
+        defer_penalty = max(0, self.config.defer_unplanned_penalty_minutes) * travel_penalty
+        priority_bonus = (
+            TICKET_COMPLETION_REWARD
+            + UNPLANNED_URGENCY_TIEBREAKER[ticket.urgency]
+            + defer_penalty
+        )
+        score_delta = (
+            extra_travel * travel_penalty
+            + ticket.service_minutes
+            + extra_route_work_overflow_penalty
+            - priority_bonus
+        )
         return Insertion(
             technician_id=route.technician.id,
             position=position,
@@ -378,7 +409,7 @@ class InitialRouteOptimizer:
                 return False
             if non_urgent_minutes > self.config.initial_non_urgent_minutes_per_technician:
                 return False
-            if route_work_minutes > self.config.initial_route_work_minutes_per_technician:
+            if self._starts_ticket_after_latest_route_work_start(timeline):
                 return False
         return True
 
@@ -388,6 +419,7 @@ class InitialRouteOptimizer:
         completed = 0
         sla_misses = 0
         overtime = 0
+        route_work_overflow_penalty = 0
         planned_ticket_ids: set[int] = set()
 
         for route in solution.routes.values():
@@ -408,6 +440,10 @@ class InitialRouteOptimizer:
                     completed += 1
                     planned_ticket_ids.add(item.ticket.id)
 
+            route_work_overflow_penalty += self._route_work_overflow_penalty_points(
+                self._route_work_minutes(timeline)
+            )
+
             if timeline:
                 route_end = timeline[-1].planned_end_at
             else:
@@ -417,8 +453,14 @@ class InitialRouteOptimizer:
                 overtime += int((route_end - day_end).total_seconds() // 60)
 
         solution.unplanned_ticket_ids = {ticket.id for ticket in self.tickets if ticket.id not in planned_ticket_ids}
+        defer_penalty = (
+            max(0, self.config.defer_unplanned_penalty_minutes)
+            * max(0, self.config.travel_penalty_per_minute)
+        )
         unplanned_penalty = sum(
-            UNPLANNED_PENALTY_BY_URGENCY[self.ticket_by_id[ticket_id].urgency]
+            UNPLANNED_TICKET_PENALTY
+            + UNPLANNED_URGENCY_TIEBREAKER[self.ticket_by_id[ticket_id].urgency]
+            + defer_penalty
             for ticket_id in solution.unplanned_ticket_ids
         )
         solution.total_travel_minutes = total_travel
@@ -430,6 +472,7 @@ class InitialRouteOptimizer:
             sla_misses * SLA_MISS_PENALTY
             + unplanned_penalty
             + overtime * OVERTIME_PENALTY_PER_MINUTE
+            + route_work_overflow_penalty
             + total_travel * max(0, self.config.travel_penalty_per_minute)
         )
 
@@ -581,6 +624,44 @@ class InitialRouteOptimizer:
                     )
                 )
         return timeline
+
+
+    def _starts_ticket_after_latest_route_work_start(
+        self,
+        timeline: list[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak],
+    ) -> bool:
+        """Return True when a route begins a ticket after the protected buffer starts.
+
+        The 6h route-work target is intentionally soft: a ticket that started
+        before the protected buffer may finish slightly over target. What we do
+        not want is starting another ticket once the mechanic is already in the
+        reserved part of the day. Breaks do not count as route work.
+        """
+        latest_start = max(0, self.config.latest_ticket_start_route_work_minutes)
+        worked_minutes = 0
+        for item in timeline:
+            if isinstance(item, PlannedStop):
+                if worked_minutes >= latest_start:
+                    return True
+                worked_minutes += item.ticket.service_minutes
+            elif isinstance(item, PlannedTravel):
+                worked_minutes += item.travel_minutes
+            elif isinstance(item, PlannedRequirementPickup):
+                worked_minutes += item.duration_minutes
+        return False
+
+    def _route_work_overflow_penalty_points(self, route_work_minutes: int) -> int:
+        """Soft, increasing penalty for ending above the 6h route-work target."""
+        target = max(0, self.config.initial_route_work_minutes_per_technician)
+        overflow = max(0, route_work_minutes - target)
+        if overflow == 0:
+            return 0
+
+        travel_penalty = max(1, self.config.travel_penalty_per_minute)
+        # First few overflow minutes are allowed but not free. The quadratic
+        # term makes every additional minute more expensive than the previous
+        # one, so 6h05 can win while 6h45 usually will not.
+        return int(overflow * travel_penalty + (overflow * overflow * travel_penalty) / 10)
 
     def _route_work_minutes(
         self,
