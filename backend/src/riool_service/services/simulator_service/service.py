@@ -187,12 +187,18 @@ def generate_scenario_tickets(session: Session, scenario_id: str, seed: int | No
     simulation_day = date.today()
 
     # The existing seeders own their own DB sessions, so commit any API work first.
-    session.commit()
-    normal_result = seed_tickets(scenario.scenario_id, simulation_date=simulation_day, seed=seed)
+    effective_seed = seed if seed is not None else scenario.seed
+
+    normal_result = seed_tickets(
+        scenario.scenario_id,
+        simulation_date=simulation_day,
+        seed=effective_seed,
+    )
+
     simulation_result = seed_simulation_tickets(
         scenario.scenario_id,
         simulation_date=simulation_day,
-        seed=None if seed is None else seed + 1,
+        seed=None if effective_seed is None else effective_seed + 1,
     )
 
     state = session.get(SimulationState, DEFAULT_STATE_ID)
@@ -710,9 +716,12 @@ def inject_due_tickets(session: Session, state: SimulationState | None = None) -
             )
 
         session.delete(simulation_ticket)
+        session.flush()
         injected_count += 1
 
     if injected_count:
+        # Incremental planning is handled by the separate planning worker, not
+        # by the simulator injection worker itself.
         _append_log(state, f"{injected_count} ticket(s) ingeschoten", at=current_dt)
         session.flush()
     return injected_count

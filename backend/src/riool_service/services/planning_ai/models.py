@@ -47,6 +47,10 @@ class PlanningConfig:
     break_window_end_minutes: int = 13 * 60
     requirement_pickup_duration_minutes: int = 5
     defer_unplanned_penalty_minutes: int = 0
+    # Soft cost for changing an already communicated appointment on the active
+    # planning day during incremental new-ticket insertion. Expressed as
+    # equivalent travel minutes so it is naturally weighed against route quality.
+    incremental_today_reschedule_penalty_minutes: int = 30
 
 
 @dataclass(frozen=True)

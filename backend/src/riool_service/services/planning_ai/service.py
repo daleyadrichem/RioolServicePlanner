@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import logging
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -34,6 +35,7 @@ from riool_service.services.planning_ai.models import (
     PlannedRequirementPickup,
     PlanningConfig,
     PlanningSolution,
+    TicketInput,
 )
 from riool_service.services.planning_ai.optimizer import (
     InitialRouteOptimizer,
@@ -42,9 +44,11 @@ from riool_service.services.planning_ai.optimizer import (
     UNPLANNED_URGENCY_TIEBREAKER,
     OVERTIME_PENALTY_PER_MINUTE,
 )
-from riool_service.services.planning_ai.routing import get_planning_route_matrix
+from riool_service.services.planning_ai.routing import get_incremental_planning_route_matrix, get_planning_route_matrix
 from riool_service.services.planning_ai.selection import load_available_technicians, load_candidate_tickets
 
+
+logger = logging.getLogger(__name__)
 
 SUPPLY_REQUIREMENT_CODES = {"SUPPLIES"}
 
@@ -179,6 +183,884 @@ def _day_anchor(selected_day: date | None, fallback: datetime | None) -> datetim
     if selected_day is None:
         return fallback
     return datetime.combine(selected_day, time.min, tzinfo=fallback.tzinfo if fallback else None)
+
+
+def plan_new_ticket_incrementally(
+    session: Session,
+    ticket_id: int,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Insert one newly-open ticket into the latest plan without full replanning.
+
+    This is intentionally not the overnight multi-start optimizer. It starts
+    from the latest persisted planning run, tries the new ticket in the best
+    insertion position, and only uses a small local repair step around that
+    insertion. If today is too full for an urgent ticket, non-urgent tickets from
+    the active planning day may be pushed to later horizon days with a soft
+    reschedule penalty.
+    """
+    payload = payload or {}
+    logger.debug("Incremental replanner requested for ticket_id=%s payload=%s", ticket_id, payload)
+    ticket = _load_ticket_for_planning(session, ticket_id)
+    if ticket is None:
+        logger.debug("Incremental replanner skipped ticket_id=%s: ticket not found", ticket_id)
+        return None
+    if ticket.status != TicketStatus.OPEN:
+        logger.debug(
+            "Incremental replanner skipped ticket_id=%s: status=%s is not OPEN",
+            ticket_id,
+            ticket.status,
+        )
+        return None
+
+    logger.debug(
+        "Incremental replanner loaded ticket_id=%s branch_id=%s urgency=%s deadline=%s created_at=%s",
+        ticket.id,
+        ticket.branch_id,
+        ticket.urgency,
+        ticket.deadline_at,
+        ticket.created_at,
+    )
+
+    latest_run = _latest_completed_planning_run(session, ticket.branch_id)
+    if latest_run is None:
+        logger.debug(
+            "Incremental replanner cannot plan ticket_id=%s: no completed planning run for branch_id=%s",
+            ticket_id,
+            ticket.branch_id,
+        )
+        return {
+            "planned": False,
+            "ticket_id": ticket_id,
+            "reason": "No completed planning run exists yet; incremental insertion needs an existing plan.",
+        }
+
+    config_payload = {
+        "branch_id": ticket.branch_id,
+        "planned_date": latest_run.planned_date,
+        **payload,
+    }
+    config = _config_from_payload(config_payload)
+    config = replace(
+        config,
+        multi_start_iterations=1,
+        # Incremental insertion must be a seconds-level operation. Do not run
+        # the normal stochastic/local-search improvement loop here; it can
+        # examine thousands of move/swap/2-opt candidates and accidentally turn
+        # one-ticket insertion into a near-full replanning pass.
+        local_search_iterations=0,
+    )
+    logger.debug(
+        "Incremental replanner using latest_run_id=%s planned_date=%s horizon_days=%s local_search_iterations=%s stop_condition=direct_insert_or_minimal_tail_deferral_no_local_search",
+        latest_run.id,
+        latest_run.planned_date,
+        config.planning_horizon_days,
+        config.local_search_iterations,
+    )
+
+    technicians = load_available_technicians(session, config)
+    logger.debug(
+        "Incremental replanner loaded %s available technician(s): %s",
+        len(technicians),
+        [technician.id for technician in technicians],
+    )
+    active_assignments = _overview_assignments(session, latest_run.id)
+    logger.debug(
+        "Incremental replanner loaded %s visible active assignment(s) from latest_run_id=%s",
+        len(active_assignments),
+        latest_run.id,
+    )
+    if any(assignment.ticket_id == ticket_id for assignment in active_assignments):
+        logger.debug(
+            "Incremental replanner skipped ticket_id=%s: already present in latest_run_id=%s",
+            ticket_id,
+            latest_run.id,
+        )
+        return None
+
+    new_ticket_input = _ticket_to_input(ticket, config)
+    if new_ticket_input is None:
+        logger.debug("Incremental replanner cannot plan ticket_id=%s: missing/invalid route location", ticket_id)
+        return {
+            "planned": False,
+            "ticket_id": ticket_id,
+            "reason": "Ticket has no usable route location.",
+        }
+    if not any(new_ticket_input.requirement_codes.issubset(technician.requirement_codes) for technician in technicians):
+        logger.debug(
+            "Incremental replanner cannot plan ticket_id=%s: requirements=%s do not match any technician",
+            ticket_id,
+            sorted(new_ticket_input.requirement_codes),
+        )
+        return {
+            "planned": False,
+            "ticket_id": ticket_id,
+            "reason": "No technician has the required skills for this ticket.",
+        }
+
+    if new_ticket_input.urgency == TicketUrgency.URGENT:
+        logger.debug(
+            "Incremental replanner ticket_id=%s is URGENT; removing protected route-work caps for this insert",
+            ticket_id,
+        )
+        # Urgent incremental inserts should not be blocked by the initial
+        # planner's protected 6-hour workload target. Keep the real workday and
+        # skill constraints, but remove the 6h route-work/non-urgent caps so
+        # urgent jobs can be placed today and optionally push normal work out.
+        config = replace(
+            config,
+            initial_non_urgent_minutes_per_technician=24 * 60,
+            initial_route_work_minutes_per_technician=24 * 60,
+            latest_ticket_start_route_work_minutes=24 * 60,
+        )
+
+    existing_inputs = _ticket_inputs_from_assignments(active_assignments, config)
+    logger.debug(
+        "Incremental replanner converted %s active assignment(s) to %s existing ticket input(s)",
+        len(active_assignments),
+        len(existing_inputs),
+    )
+    ticket_inputs_by_id = {item.id: item for item in existing_inputs}
+    ticket_inputs_by_id[new_ticket_input.id] = new_ticket_input
+    logger.debug(
+        "Incremental replanner building route matrix for ticket_id=%s with %s existing ticket(s) and refresh_cache=%s",
+        ticket_id,
+        len(existing_inputs),
+        config.refresh_route_cache,
+    )
+    matrix = get_incremental_planning_route_matrix(
+        session,
+        technicians,
+        existing_inputs,
+        new_ticket_input,
+        refresh_cache=config.refresh_route_cache,
+    )
+    logger.debug(
+        "Incremental replanner matrix ready for ticket_id=%s: %s travel legs",
+        ticket_id,
+        len(matrix.travel_minutes),
+    )
+
+    base_date = config.planned_date.date()
+    horizon_days = max(
+        1,
+        config.planning_horizon_days,
+        *((assignment.planned_start_at.date() - base_date).days + 1 for assignment in active_assignments),
+    )
+    base_routes_by_day = _routes_from_assignments_by_day(
+        active_assignments,
+        technicians,
+        base_date=base_date,
+        horizon_days=horizon_days,
+    )
+    original_today = _original_today_assignment_map(active_assignments, base_date)
+    logger.debug(
+        "Incremental replanner base_date=%s horizon_days=%s original_today_assignments=%s",
+        base_date,
+        horizon_days,
+        len(original_today),
+    )
+
+    candidates: list[dict[str, Any]] = []
+    target_days = [0] if new_ticket_input.urgency == TicketUrgency.URGENT else list(range(horizon_days))
+    logger.debug("Incremental replanner ticket_id=%s trying direct insertion on day indexes=%s", ticket_id, target_days)
+    for target_day_index in target_days:
+        candidate = _incremental_direct_candidate(
+            config=config,
+            technicians=technicians,
+            matrix=matrix,
+            base_routes_by_day=base_routes_by_day,
+            ticket_inputs_by_id=ticket_inputs_by_id,
+            new_ticket=new_ticket_input,
+            target_day_index=target_day_index,
+            horizon_days=horizon_days,
+            original_today=original_today,
+        )
+        if candidate is not None:
+            logger.debug(
+                "Incremental replanner direct candidate for ticket_id=%s day_index=%s score=%.3f rescheduled_today=%s",
+                ticket_id,
+                target_day_index,
+                candidate["score"],
+                len(candidate["rescheduled_today_ticket_ids"]),
+            )
+            candidates.append(candidate)
+        else:
+            logger.debug(
+                "Incremental replanner direct candidate rejected for ticket_id=%s day_index=%s",
+                ticket_id,
+                target_day_index,
+            )
+
+    # If an urgent ticket cannot fit today directly, move only the minimum
+    # non-urgent tail work from the chosen mechanic's same-day route to later
+    # days. This avoids the previous combinatorial deferral search.
+    today_non_urgent_ids = [
+        assignment.ticket_id
+        for assignment in active_assignments
+        if assignment.planned_start_at.date() == base_date
+        and assignment.ticket_id in ticket_inputs_by_id
+        and ticket_inputs_by_id[assignment.ticket_id].urgency != TicketUrgency.URGENT
+    ]
+    if new_ticket_input.urgency == TicketUrgency.URGENT and horizon_days > 1 and not candidates:
+        logger.debug(
+            "Incremental replanner urgent ticket_id=%s has no direct feasible insert; trying minimal same-route tail deferrals: today_non_urgent=%s",
+            ticket_id,
+            today_non_urgent_ids,
+        )
+        tail_candidates = _incremental_minimal_tail_deferral_candidates(
+            config=config,
+            technicians=technicians,
+            matrix=matrix,
+            base_routes_by_day=base_routes_by_day,
+            ticket_inputs_by_id=ticket_inputs_by_id,
+            new_ticket=new_ticket_input,
+            horizon_days=horizon_days,
+            original_today=original_today,
+        )
+        for candidate in tail_candidates:
+            logger.debug(
+                "Incremental replanner tail-deferral candidate for ticket_id=%s technician_id=%s position=%s moved=%s score=%.3f rescheduled_today=%s",
+                ticket_id,
+                candidate.get("inserted_technician_id"),
+                candidate.get("inserted_position"),
+                sorted(candidate.get("moved_ticket_ids", set())),
+                candidate["score"],
+                len(candidate["rescheduled_today_ticket_ids"]),
+            )
+            candidates.append(candidate)
+
+    if not candidates:
+        logger.debug("Incremental replanner found no feasible candidate for ticket_id=%s", ticket_id)
+        return {
+            "planned": False,
+            "ticket_id": ticket_id,
+            "reason": "No feasible incremental insertion found inside the current planning horizon.",
+        }
+
+    best = min(candidates, key=lambda candidate: candidate["score"])
+    logger.debug(
+        "Incremental replanner selected best candidate for ticket_id=%s: score=%.3f new_ticket_day_index=%s rescheduled_today_ids=%s total_candidates=%s",
+        ticket_id,
+        best["score"],
+        best["new_ticket_day_index"],
+        sorted(best["rescheduled_today_ticket_ids"]),
+        len(candidates),
+    )
+    planning_run = _persist_incremental_plan(
+        session,
+        branch_id=ticket.branch_id,
+        base_config=config,
+        latest_run=latest_run,
+        candidate=best,
+        new_ticket=new_ticket_input,
+    )
+    logger.debug(
+        "Incremental replanner persisted ticket_id=%s into planning_run_id=%s",
+        ticket_id,
+        planning_run.id,
+    )
+    return {
+        "planned": True,
+        "ticket_id": ticket_id,
+        "planning_run_id": planning_run.id,
+        "algorithm": "incremental_best_insertion_minimal_tail_deferral",
+        "planning_day": (base_date + timedelta(days=best["new_ticket_day_index"])).isoformat(),
+        "rescheduled_today_count": len(best["rescheduled_today_ticket_ids"]),
+        "rescheduled_today_ticket_ids": sorted(best["rescheduled_today_ticket_ids"]),
+        "score": round(best["score"], 3),
+        "notes": [
+            "Started from the latest persisted plan; did not run the multi-start initial planner.",
+            "Inserted the new ticket at the best incremental position without running stochastic/local-search replanning.",
+            "For urgent tickets that do not directly fit, only the minimum same-mechanic route tail is moved to later days.",
+            "Urgent tickets are only considered for the active planning day; today's non-urgent jobs may be deferred with a soft reschedule penalty.",
+            "Medium and low tickets are considered across the horizon with only the existing small medium score tie-breaker.",
+        ],
+    }
+
+
+def plan_next_unplanned_ticket_incrementally(
+    session: Session,
+    payload: dict[str, Any] | None = None,
+    *,
+    max_candidates: int = 50,
+) -> dict[str, Any]:
+    """Worker entry point: find one open unplanned ticket and insert it.
+
+    This is deliberately separate from ticket creation and simulator injection.
+    The planning worker calls this repeatedly, so API requests only create work
+    and the worker is responsible for eventually inserting unplanned tickets into
+    the latest active plan.
+    """
+    payload = payload or {}
+    logger.debug("Planning worker scan started: max_candidates=%s payload=%s", max_candidates, payload)
+    candidates = list(
+        session.scalars(
+            select(Ticket)
+            .where(Ticket.status == TicketStatus.OPEN)
+            .order_by(Ticket.created_at.asc(), Ticket.id.asc())
+            .limit(max(1, max_candidates))
+        )
+    )
+    candidates.sort(key=lambda ticket: (0 if ticket.urgency == TicketUrgency.URGENT else 1, ticket.created_at, ticket.id))
+    logger.debug(
+        "Planning worker scan loaded %s open candidate ticket(s): %s",
+        len(candidates),
+        [
+            {
+                "id": ticket.id,
+                "branch_id": ticket.branch_id,
+                "urgency": getattr(ticket.urgency, "value", str(ticket.urgency)),
+                "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
+            }
+            for ticket in candidates[:10]
+        ],
+    )
+
+    skipped_planned = 0
+    failures: list[dict[str, Any]] = []
+    for ticket in candidates:
+        logger.debug(
+            "Planning worker checking ticket_id=%s branch_id=%s urgency=%s",
+            ticket.id,
+            ticket.branch_id,
+            ticket.urgency,
+        )
+        if _ticket_is_in_latest_active_plan(session, ticket):
+            skipped_planned += 1
+            logger.debug("Planning worker skipping ticket_id=%s: already in latest active plan", ticket.id)
+            continue
+        logger.debug("Planning worker found unplanned ticket_id=%s; starting incremental replanner", ticket.id)
+        result = plan_new_ticket_incrementally(session, ticket.id, payload)
+        if result is None:
+            skipped_planned += 1
+            logger.debug("Planning worker ticket_id=%s returned None from replanner; treating as skipped", ticket.id)
+            continue
+        if result.get("planned"):
+            logger.debug("Planning worker successfully planned ticket_id=%s: %s", ticket.id, result)
+            return {
+                "checked": len(failures) + skipped_planned + 1,
+                "skipped_already_planned": skipped_planned,
+                **result,
+            }
+        logger.debug("Planning worker could not plan ticket_id=%s: %s", ticket.id, result)
+        failures.append(result)
+
+    if failures:
+        logger.debug(
+            "Planning worker scan ended with failures: checked=%s skipped_planned=%s failures=%s",
+            len(failures) + skipped_planned,
+            skipped_planned,
+            failures[:5],
+        )
+        return {
+            "planned": False,
+            "checked": len(failures) + skipped_planned,
+            "skipped_already_planned": skipped_planned,
+            "reason": "Unplanned ticket(s) were found, but none could be inserted by the incremental replanner.",
+            "failures": failures[:5],
+        }
+    logger.debug(
+        "Planning worker scan ended: no open unplanned tickets found. checked=%s skipped_planned=%s",
+        len(candidates),
+        skipped_planned,
+    )
+    return {
+        "planned": False,
+        "checked": len(candidates),
+        "skipped_already_planned": skipped_planned,
+        "reason": "No open unplanned tickets found.",
+    }
+
+
+def planning_worker_tick(session: Session, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run one planning-worker iteration."""
+    return plan_next_unplanned_ticket_incrementally(session, payload)
+
+
+def _ticket_is_in_latest_active_plan(session: Session, ticket: Ticket) -> bool:
+    latest_run = _latest_completed_planning_run(session, ticket.branch_id)
+    if latest_run is None:
+        logger.debug(
+            "Latest-plan check for ticket_id=%s branch_id=%s: no completed planning run",
+            ticket.id,
+            ticket.branch_id,
+        )
+        return False
+    is_planned = (
+        session.scalar(
+            select(PlanningAssignment.id)
+            .where(
+                PlanningAssignment.planning_run_id == latest_run.id,
+                PlanningAssignment.ticket_id == ticket.id,
+                PlanningAssignment.status.in_(VISIBLE_ASSIGNMENT_STATUSES),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+    logger.debug(
+        "Latest-plan check for ticket_id=%s branch_id=%s latest_run_id=%s: planned=%s",
+        ticket.id,
+        ticket.branch_id,
+        latest_run.id,
+        is_planned,
+    )
+    return is_planned
+
+def _load_ticket_for_planning(session: Session, ticket_id: int) -> Ticket | None:
+    return session.scalar(
+        select(Ticket)
+        .options(
+            joinedload(Ticket.location),
+            joinedload(Ticket.subject),
+            joinedload(Ticket.ticket_requirements).joinedload(TicketRequirement.requirement),
+        )
+        .where(Ticket.id == ticket_id)
+    )
+
+
+def _ticket_to_input(ticket: Ticket, config: PlanningConfig) -> TicketInput | None:
+    if ticket.location is None or ticket.location.latitude is None or ticket.location.longitude is None:
+        return None
+    all_requirement_codes = frozenset(
+        link.requirement.code.upper()
+        for link in ticket.ticket_requirements
+        if link.requirement is not None and link.requirement.code is not None
+    )
+    requirement_codes = frozenset(code for code in all_requirement_codes if code not in SUPPLY_REQUIREMENT_CODES)
+    supply_requirement_codes = frozenset(code for code in all_requirement_codes if code in SUPPLY_REQUIREMENT_CODES)
+    return TicketInput(
+        id=ticket.id,
+        location_id=ticket.location_id,
+        urgency=ticket.urgency,
+        deadline_at=ticket.deadline_at,
+        created_at=ticket.created_at,
+        service_minutes=ticket.actual_duration_minutes or config.default_service_minutes,
+        requirement_codes=requirement_codes,
+        supply_requirement_codes=supply_requirement_codes,
+        subject=ticket.subject.name if ticket.subject is not None else None,
+        address=ticket.location.formatted_address or ticket.location.input_address or "",
+    )
+
+
+def _ticket_inputs_from_assignments(assignments: list[PlanningAssignment], config: PlanningConfig) -> list[TicketInput]:
+    result: list[TicketInput] = []
+    seen: set[int] = set()
+    for assignment in assignments:
+        if assignment.ticket_id in seen:
+            continue
+        item = _ticket_to_input(assignment.ticket, config)
+        if item is not None:
+            result.append(item)
+            seen.add(item.id)
+    return result
+
+
+def _routes_from_assignments_by_day(
+    assignments: list[PlanningAssignment],
+    technicians: list[Any],
+    *,
+    base_date: date,
+    horizon_days: int,
+) -> dict[int, dict[int, list[int]]]:
+    routes_by_day: dict[int, dict[int, list[int]]] = {
+        day_index: {technician.id: [] for technician in technicians}
+        for day_index in range(horizon_days)
+    }
+    ordered = sorted(assignments, key=lambda item: (item.planned_start_at, item.technician_id, item.sequence_order))
+    for assignment in ordered:
+        day_index = (assignment.planned_start_at.date() - base_date).days
+        if 0 <= day_index < horizon_days and assignment.technician_id in routes_by_day[day_index]:
+            routes_by_day[day_index][assignment.technician_id].append(assignment.ticket_id)
+    return routes_by_day
+
+
+def _original_today_assignment_map(assignments: list[PlanningAssignment], base_date: date) -> dict[int, tuple[int, datetime]]:
+    return {
+        assignment.ticket_id: (assignment.technician_id, assignment.planned_start_at)
+        for assignment in assignments
+        if assignment.planned_start_at.date() == base_date
+    }
+
+
+def _day_config(config: PlanningConfig, day_index: int) -> PlanningConfig:
+    return replace(
+        config,
+        planned_date=config.planned_date + timedelta(days=day_index),
+        random_seed=(config.random_seed + day_index if isinstance(config.random_seed, int) else config.random_seed),
+    )
+
+
+def _optimizer_from_routes(
+    *,
+    config: PlanningConfig,
+    technicians: list[Any],
+    matrix: Any,
+    ticket_inputs_by_id: dict[int, TicketInput],
+    routes_for_day: dict[int, list[int]],
+    extra_ticket_ids: set[int] | None = None,
+) -> tuple[InitialRouteOptimizer, PlanningSolution]:
+    ticket_ids = set(extra_ticket_ids or set())
+    for route_ids in routes_for_day.values():
+        ticket_ids.update(route_ids)
+    tickets = [ticket_inputs_by_id[ticket_id] for ticket_id in sorted(ticket_ids) if ticket_id in ticket_inputs_by_id]
+    optimizer = InitialRouteOptimizer(config=config, technicians=technicians, tickets=tickets, matrix=matrix)
+    solution = optimizer._empty_solution()  # noqa: SLF001 - intentional bounded incremental reuse
+    for technician_id, route_ids in routes_for_day.items():
+        if technician_id in solution.routes:
+            solution.routes[technician_id].ticket_ids = [ticket_id for ticket_id in route_ids if ticket_id in ticket_inputs_by_id]
+    optimizer._score(solution)  # noqa: SLF001
+    return optimizer, solution
+
+
+def _incremental_direct_candidate(
+    *,
+    config: PlanningConfig,
+    technicians: list[Any],
+    matrix: Any,
+    base_routes_by_day: dict[int, dict[int, list[int]]],
+    ticket_inputs_by_id: dict[int, TicketInput],
+    new_ticket: TicketInput,
+    target_day_index: int,
+    horizon_days: int,
+    original_today: dict[int, tuple[int, datetime]],
+) -> dict[str, Any] | None:
+    day_results: dict[int, tuple[InitialRouteOptimizer, PlanningSolution]] = {}
+    for day_index in range(horizon_days):
+        optimizer, solution = _optimizer_from_routes(
+            config=_day_config(config, day_index),
+            technicians=technicians,
+            matrix=matrix,
+            ticket_inputs_by_id=ticket_inputs_by_id,
+            routes_for_day={tid: ids[:] for tid, ids in base_routes_by_day[day_index].items()},
+            extra_ticket_ids={new_ticket.id} if day_index == target_day_index else set(),
+        )
+        day_results[day_index] = (optimizer, solution)
+
+    optimizer, solution = day_results[target_day_index]
+    insertion = optimizer._best_insertion(solution, new_ticket, allow_low_priority=True)  # noqa: SLF001
+    if insertion is None:
+        return None
+    solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, new_ticket.id)
+    # Incremental direct insertion intentionally does not run local-search repair.
+    # The goal is to keep the existing plan stable and only move the affected
+    # route forward after the inserted ticket.
+    optimizer._score(solution)  # noqa: SLF001
+    day_results[target_day_index] = (optimizer, solution)
+    return _incremental_candidate_result(
+        config=config,
+        day_results=day_results,
+        new_ticket_day_index=target_day_index,
+        original_today=original_today,
+    )
+
+
+
+def _incremental_minimal_tail_deferral_candidates(
+    *,
+    config: PlanningConfig,
+    technicians: list[Any],
+    matrix: Any,
+    base_routes_by_day: dict[int, dict[int, list[int]]],
+    ticket_inputs_by_id: dict[int, TicketInput],
+    new_ticket: TicketInput,
+    horizon_days: int,
+    original_today: dict[int, tuple[int, datetime]],
+) -> list[dict[str, Any]]:
+    """Return bounded urgent-insert candidates by pushing only route tail work.
+
+    Stop condition:
+    - evaluate each feasible mechanic/position for the urgent ticket on day 0 once;
+    - after insertion, remove the smallest possible number of non-urgent tickets
+      from the end of that same mechanic's route until day 0 is feasible;
+    - greedily insert those removed tickets into later days;
+    - no combinations, no full-plan reshuffle, no local search.
+    """
+    results: list[dict[str, Any]] = []
+    day0_routes = base_routes_by_day.get(0, {})
+    for technician in technicians:
+        if not new_ticket.requirement_codes.issubset(technician.requirement_codes):
+            continue
+        original_route = day0_routes.get(technician.id, [])
+        for position in range(len(original_route) + 1):
+            routes_by_day = {
+                day_index: {technician_id: ids[:] for technician_id, ids in routes.items()}
+                for day_index, routes in base_routes_by_day.items()
+            }
+            candidate_route = routes_by_day[0][technician.id]
+            candidate_route.insert(position, new_ticket.id)
+
+            optimizer, solution = _optimizer_from_routes(
+                config=_day_config(config, 0),
+                technicians=technicians,
+                matrix=matrix,
+                ticket_inputs_by_id=ticket_inputs_by_id,
+                routes_for_day=routes_by_day[0],
+                extra_ticket_ids={new_ticket.id},
+            )
+
+            moved_ticket_ids: list[int] = []
+            # Remove only as much non-urgent tail work as needed, and only from
+            # the route that received the urgent ticket. Prefer preserving earlier
+            # appointments on that route and all other mechanics' routes.
+            while not optimizer._is_solution_hard_feasible(solution):  # noqa: SLF001
+                route_ids = solution.routes[technician.id].ticket_ids
+                removable_index = next(
+                    (
+                        idx
+                        for idx in range(len(route_ids) - 1, -1, -1)
+                        if route_ids[idx] != new_ticket.id
+                        and ticket_inputs_by_id[route_ids[idx]].urgency != TicketUrgency.URGENT
+                    ),
+                    None,
+                )
+                if removable_index is None:
+                    break
+                moved_ticket_ids.append(route_ids.pop(removable_index))
+                optimizer._score(solution)  # noqa: SLF001
+
+            if not optimizer._is_solution_hard_feasible(solution):  # noqa: SLF001
+                logger.debug(
+                    "Incremental replanner tail candidate rejected: ticket_id=%s technician_id=%s position=%s reason=today_still_infeasible moved=%s",
+                    new_ticket.id,
+                    technician.id,
+                    position,
+                    moved_ticket_ids,
+                )
+                continue
+
+            optimizer._score(solution)  # noqa: SLF001
+            day_results: dict[int, tuple[InitialRouteOptimizer, PlanningSolution]] = {0: (optimizer, solution)}
+            for day_index in range(1, horizon_days):
+                day_results[day_index] = _optimizer_from_routes(
+                    config=_day_config(config, day_index),
+                    technicians=technicians,
+                    matrix=matrix,
+                    ticket_inputs_by_id=ticket_inputs_by_id,
+                    routes_for_day=routes_by_day[day_index],
+                )
+
+            if not _place_moved_tickets_greedily(
+                config=config,
+                technicians=technicians,
+                matrix=matrix,
+                ticket_inputs_by_id=ticket_inputs_by_id,
+                day_results=day_results,
+                moved_ticket_ids=moved_ticket_ids,
+                start_day_index=1,
+                horizon_days=horizon_days,
+            ):
+                logger.debug(
+                    "Incremental replanner tail candidate rejected: ticket_id=%s technician_id=%s position=%s reason=moved_tickets_do_not_fit_future_days moved=%s",
+                    new_ticket.id,
+                    technician.id,
+                    position,
+                    moved_ticket_ids,
+                )
+                continue
+
+            candidate = _incremental_candidate_result(
+                config=config,
+                day_results=day_results,
+                new_ticket_day_index=0,
+                original_today=original_today,
+            )
+            candidate["inserted_technician_id"] = technician.id
+            candidate["inserted_position"] = position
+            candidate["moved_ticket_ids"] = set(moved_ticket_ids)
+            results.append(candidate)
+    return results
+
+
+def _place_moved_tickets_greedily(
+    *,
+    config: PlanningConfig,
+    technicians: list[Any],
+    matrix: Any,
+    ticket_inputs_by_id: dict[int, TicketInput],
+    day_results: dict[int, tuple[InitialRouteOptimizer, PlanningSolution]],
+    moved_ticket_ids: list[int],
+    start_day_index: int,
+    horizon_days: int,
+) -> bool:
+    for moved_ticket_id in moved_ticket_ids:
+        moved_ticket = ticket_inputs_by_id[moved_ticket_id]
+        best: tuple[float, int, int, int, InitialRouteOptimizer, PlanningSolution] | None = None
+        for day_index in range(start_day_index, horizon_days):
+            current_optimizer, current_solution = day_results[day_index]
+            routes_for_day = {
+                technician_id: route.ticket_ids[:]
+                for technician_id, route in current_solution.routes.items()
+            }
+            optimizer, solution = _optimizer_from_routes(
+                config=_day_config(config, day_index),
+                technicians=technicians,
+                matrix=matrix,
+                ticket_inputs_by_id=ticket_inputs_by_id,
+                routes_for_day=routes_for_day,
+                extra_ticket_ids={moved_ticket_id},
+            )
+            insertion = optimizer._best_insertion(solution, moved_ticket, allow_low_priority=True)  # noqa: SLF001
+            if insertion is None:
+                continue
+            solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, moved_ticket_id)
+            optimizer._score(solution)  # noqa: SLF001
+            candidate_score = solution.score
+            if best is None or candidate_score < best[0]:
+                best = (
+                    candidate_score,
+                    day_index,
+                    insertion.technician_id,
+                    insertion.position,
+                    optimizer,
+                    solution,
+                )
+        if best is None:
+            return False
+        _, best_day_index, best_technician_id, best_position, best_optimizer, best_solution = best
+        logger.debug(
+            "Incremental replanner moved ticket_id=%s placed on day_index=%s technician_id=%s position=%s score=%.3f",
+            moved_ticket_id,
+            best_day_index,
+            best_technician_id,
+            best_position,
+            best_solution.score,
+        )
+        day_results[best_day_index] = (best_optimizer, best_solution)
+    return True
+
+
+def _incremental_candidate_result(
+    *,
+    config: PlanningConfig,
+    day_results: dict[int, tuple[InitialRouteOptimizer, PlanningSolution]],
+    new_ticket_day_index: int,
+    original_today: dict[int, tuple[int, datetime]],
+) -> dict[str, Any]:
+    rescheduled_today_ticket_ids = _rescheduled_today_ticket_ids(day_results.get(0), original_today)
+    reschedule_penalty = (
+        len(rescheduled_today_ticket_ids)
+        * max(0, config.incremental_today_reschedule_penalty_minutes)
+        * max(0, config.travel_penalty_per_minute)
+    )
+    score = sum(solution.score for _, solution in day_results.values()) + reschedule_penalty
+    return {
+        "day_results": day_results,
+        "new_ticket_day_index": new_ticket_day_index,
+        "rescheduled_today_ticket_ids": rescheduled_today_ticket_ids,
+        "reschedule_penalty": reschedule_penalty,
+        "score": score,
+    }
+
+
+def _rescheduled_today_ticket_ids(
+    today_result: tuple[InitialRouteOptimizer, PlanningSolution] | None,
+    original_today: dict[int, tuple[int, datetime]],
+) -> set[int]:
+    if today_result is None or not original_today:
+        return set()
+    optimizer, solution = today_result
+    current: dict[int, tuple[int, datetime]] = {}
+    for technician_id in solution.routes:
+        for stop in optimizer.build_stops(solution, technician_id):
+            current[stop.ticket.id] = (technician_id, stop.planned_start_at)
+    changed: set[int] = set()
+    for ticket_id, original in original_today.items():
+        if current.get(ticket_id) != original:
+            changed.add(ticket_id)
+    return changed
+
+
+def _persist_incremental_plan(
+    session: Session,
+    *,
+    branch_id: int,
+    base_config: PlanningConfig,
+    latest_run: PlanningRun,
+    candidate: dict[str, Any],
+    new_ticket: TicketInput,
+) -> PlanningRun:
+    logger.debug(
+        "Persisting incremental plan for branch_id=%s from latest_run_id=%s new_ticket_id=%s",
+        branch_id,
+        latest_run.id,
+        new_ticket.id,
+    )
+    _move_existing_active_assignments(session, branch_id)
+    planning_run = PlanningRun(
+        branch_id=branch_id,
+        trigger_type=(
+            PlanningRunTrigger.NEW_URGENT_TICKET
+            if new_ticket.urgency == TicketUrgency.URGENT
+            else PlanningRunTrigger.NEW_TICKET
+        ),
+        status=PlanningRunStatus.RUNNING,
+        planned_date=latest_run.planned_date,
+        started_at=datetime.utcnow(),
+        notes=(
+            "Incremental new-ticket insertion from previous planning run "
+            f"{latest_run.id}; no multi-start full replanning was executed."
+        ),
+    )
+    session.add(planning_run)
+    session.flush()
+
+    planned_ticket_ids: list[int] = []
+    sequence_by_technician: dict[int, int] = {}
+    total_travel = 0
+    total_distance = 0.0
+    for day_index in sorted(candidate["day_results"]):
+        optimizer, solution = candidate["day_results"][day_index]
+        for technician_id, route in solution.routes.items():
+            sequence_by_technician.setdefault(technician_id, 1)
+            stops = optimizer.build_stops(solution, technician_id)
+            for stop in stops:
+                assignment = PlanningAssignment(
+                    planning_run_id=planning_run.id,
+                    branch_id=branch_id,
+                    technician_id=technician_id,
+                    ticket_id=stop.ticket.id,
+                    sequence_order=sequence_by_technician[technician_id],
+                    planned_start_at=stop.planned_start_at,
+                    planned_end_at=stop.planned_end_at,
+                    estimated_duration_minutes=stop.ticket.service_minutes,
+                    estimated_travel_minutes_before=stop.travel_minutes_before,
+                    estimated_distance_km_before=stop.distance_km_before,
+                    requires_hq_pickup=stop.requires_hq_pickup,
+                    hq_location_id=stop.hq_location_id,
+                    estimated_travel_minutes_to_hq=stop.travel_minutes_to_hq,
+                    estimated_distance_km_to_hq=stop.distance_km_to_hq,
+                    estimated_travel_minutes_hq_to_ticket=stop.travel_minutes_hq_to_ticket,
+                    estimated_distance_km_hq_to_ticket=stop.distance_km_hq_to_ticket,
+                    status=PlanningAssignmentStatus.PLANNED,
+                    source=PlanningAssignmentSource.AI,
+                )
+                session.add(assignment)
+                planned_ticket_ids.append(stop.ticket.id)
+                sequence_by_technician[technician_id] += 1
+        total_travel += solution.total_travel_minutes
+        total_distance += solution.total_distance_km
+
+    if planned_ticket_ids:
+        for planned_ticket in session.query(Ticket).filter(Ticket.id.in_(planned_ticket_ids)).all():
+            planned_ticket.status = TicketStatus.PLANNED
+
+    planning_run.status = PlanningRunStatus.COMPLETED
+    planning_run.completed_at = datetime.utcnow()
+    planning_run.score_total_distance_km = round(total_distance, 3)
+    planning_run.score_total_travel_minutes = int(total_travel)
+    planning_run.score_completed_tickets = len(set(planned_ticket_ids))
+    planning_run.score_unplanned_tickets = 0
+    session.flush()
+    logger.debug(
+        "Persisted incremental planning_run_id=%s with %s unique ticket assignment(s), total_travel_minutes=%s, total_distance_km=%.3f",
+        planning_run.id,
+        len(set(planned_ticket_ids)),
+        total_travel,
+        total_distance,
+    )
+    return planning_run
 
 def run_replanning(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     """Create a new plan and mark previous active assignments as moved.
@@ -870,6 +1752,9 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
         break_window_end_minutes=int(payload.get("break_window_end_minutes") or 13 * 60),
         requirement_pickup_duration_minutes=int(
             payload.get("requirement_pickup_duration_minutes") or 5
+        ),
+        incremental_today_reschedule_penalty_minutes=int(
+            payload.get("incremental_today_reschedule_penalty_minutes") or 30
         ),
     )
 

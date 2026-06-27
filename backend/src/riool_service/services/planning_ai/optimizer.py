@@ -31,7 +31,7 @@ UNPLANNED_URGENCY_TIEBREAKER = {
     # Medium and low are intentionally almost equal. With the default
     # travel_penalty_per_minute=25, this preference is only worth two minutes
     # of extra travel, so route efficiency can easily outweigh it.
-    TicketUrgency.MEDIUM: 125,
+    TicketUrgency.MEDIUM: 50,
     TicketUrgency.LOW: 0,
 }
 TICKET_COMPLETION_REWARD = UNPLANNED_TICKET_PENALTY

@@ -40,7 +40,8 @@ class ScenarioConfig(BaseModel):
         default=50,
         alias="aantal_simulation_tickets_max",
     )
-
+    
+    seed: int | None = None
     subjects: list[str] = Field(default_factory=list)
     simulation_ticket_submission_schedule: list[dict[str, int]] = Field(
         default_factory=list,

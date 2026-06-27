@@ -20,6 +20,7 @@
       "radius_km": 30,
       "reserve_uren_voor_spoed": 2,
       "lage_prio_mag_opschuiven": true,
+      "seed": 42,
       "subjects": [
         "Riool verstopt",
         "Afvoer loopt langzaam door",
@@ -48,6 +49,7 @@
       "radius_km": 30,
       "reserve_uren_voor_spoed": 3,
       "lage_prio_mag_opschuiven": true,
+      "seed": 42,
       "subjects": [
         "Riool verstopt",
         "Afvoer loopt langzaam door",
@@ -81,6 +83,7 @@
       "radius_km": 30,
       "reserve_uren_voor_spoed": 2,
       "lage_prio_mag_opschuiven": true,
+      "seed": 42,
       "subjects": [
         "Riool verstopt",
         "Afvoer loopt langzaam door",

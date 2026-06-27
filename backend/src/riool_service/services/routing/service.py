@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import logging
 from typing import Any
 
 from sqlalchemy import and_, select
@@ -16,6 +17,8 @@ from riool_service.services.routing.providers.osrm_provider import OsrmProvider,
 
 CACHE_TTL_DAYS = 30
 MAX_OPTIMIZATION_TICKETS = 25
+
+logger = logging.getLogger(__name__)
 
 
 class RoutingError(ValueError):
@@ -266,15 +269,26 @@ def _get_or_fetch_legs(
     cached = {} if refresh_cache else _load_cached_legs(session, location_ids)
     required_pairs = {(a, b) for a in location_ids for b in location_ids if a != b}
     missing_pairs = required_pairs - set(cached)
+    logger.debug(
+        "Routing full-matrix request: points=%s required_pairs=%s cached=%s missing=%s refresh_cache=%s",
+        len(points),
+        len(required_pairs),
+        len(cached),
+        len(missing_pairs),
+        refresh_cache,
+    )
 
     if not missing_pairs:
+        logger.debug("Routing full-matrix request served entirely from cache")
         return cached
 
     provider = OsrmProvider.from_env()
+    logger.debug("Routing full-matrix request calling OSRM table for %s point(s)", len(points))
     fetched = provider.table(points)
     if not fetched:
         raise RoutingError("OSRM did not return any routes for the selected tickets")
 
+    logger.debug("Routing full-matrix OSRM returned %s leg(s); upserting into cache", len(fetched))
     _upsert_cache(session, fetched)
     cached.update(fetched)
     return cached
@@ -301,13 +315,28 @@ def _get_or_fetch_legs_between(
         if source_id != destination_id
     }
     missing_pairs = required_pairs - set(cached)
+    logger.debug(
+        "Routing between request: sources=%s destinations=%s required_pairs=%s cached=%s missing=%s refresh_cache=%s",
+        len(source_points),
+        len(destination_points),
+        len(required_pairs),
+        len(cached),
+        len(missing_pairs),
+        refresh_cache,
+    )
 
     if not missing_pairs:
+        logger.debug("Routing between request served entirely from cache")
         return cached
 
     missing_source_ids = {source_id for source_id, _ in missing_pairs}
     missing_destination_ids = {destination_id for _, destination_id in missing_pairs}
     provider = OsrmProvider.from_env()
+    logger.debug(
+        "Routing between request calling OSRM table_between for missing sources=%s destinations=%s",
+        len(missing_source_ids),
+        len(missing_destination_ids),
+    )
     fetched = provider.table_between(
         [point for point in source_points if point.id in missing_source_ids],
         [point for point in destination_points if point.id in missing_destination_ids],
@@ -316,6 +345,11 @@ def _get_or_fetch_legs_between(
         raise RoutingError("OSRM did not return any routes for the selected source/destination tickets")
 
     relevant_fetched = {pair: leg for pair, leg in fetched.items() if pair in missing_pairs}
+    logger.debug(
+        "Routing between OSRM returned %s leg(s), %s relevant missing leg(s); upserting into cache",
+        len(fetched),
+        len(relevant_fetched),
+    )
     _upsert_cache(session, relevant_fetched)
     cached.update(relevant_fetched)
     return cached
@@ -323,6 +357,7 @@ def _get_or_fetch_legs_between(
 
 def _load_cached_legs(session: Session, location_ids: list[int]) -> dict[tuple[int, int], RouteLeg]:
     now = datetime.utcnow()
+    logger.debug("Routing cache load full: locations=%s", len(location_ids))
     rows = session.execute(
         select(RouteCache).where(
             and_(
@@ -343,6 +378,7 @@ def _load_cached_legs(session: Session, location_ids: list[int]) -> dict[tuple[i
             travel_minutes=row.travel_minutes,
             distance_km=row.distance_km,
         )
+    logger.debug("Routing cache load full returned %s non-expired leg(s)", len(result))
     return result
 
 
@@ -352,6 +388,11 @@ def _load_cached_legs_between(
     destination_location_ids: list[int],
 ) -> dict[tuple[int, int], RouteLeg]:
     now = datetime.utcnow()
+    logger.debug(
+        "Routing cache load between: sources=%s destinations=%s",
+        len(source_location_ids),
+        len(destination_location_ids),
+    )
     rows = session.execute(
         select(RouteCache).where(
             and_(
@@ -372,6 +413,7 @@ def _load_cached_legs_between(
             travel_minutes=row.travel_minutes,
             distance_km=row.distance_km,
         )
+    logger.debug("Routing cache load between returned %s non-expired leg(s)", len(result))
     return result
 
 

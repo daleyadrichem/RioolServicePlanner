@@ -98,6 +98,7 @@ class InitialPlanningPayload(BaseModel):
     local_search_iterations: int = 250
     random_seed: int | None = 42
     low_priority_max_extra_travel_minutes: int = 35
+    incremental_today_reschedule_penalty_minutes: int = 30
 
     def as_service_payload(self) -> dict[str, Any]:
         return self.dict(exclude_unset=True)
@@ -200,6 +201,9 @@ def validate_ticket_address(payload: AddressValidationPayload) -> dict:
 def create_ticket(payload: TicketPayload, session: SessionDep) -> dict:
     try:
         result = ticket_service.create_ticket(session, payload.as_service_payload())
+        # New tickets are intentionally not planned inline. The incremental
+        # planning worker continuously picks up open, unplanned tickets and
+        # inserts them into the active plan without blocking this API request.
         session.commit()
         return result
     except ValueError as exc:
