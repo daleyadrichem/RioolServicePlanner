@@ -6,7 +6,14 @@ from riool_service.database.db_utils import session_scope
 from riool_service.database.models.tickets import Ticket, TicketStatus
 
 from riool_service.simulator.config import get_scenario
-from riool_service.simulator.db_helpers import add_requirement_links, choose_location_near_branch, get_branch_by_name, get_or_create_subject
+from riool_service.simulator.db_helpers import (
+    add_requirement_links,
+    choose_location_near_branch,
+    get_branch_by_name,
+    get_or_create_subject,
+    simulator_reserved_address_keys,
+    simulator_reserved_location_ids,
+)
 from riool_service.simulator.utils import clear_rows_by_description_marker, combine_day_and_time, make_rng, random_datetime_between
 from riool_service.simulator.result import SeedResult
 from riool_service.simulator.ticket_factory import generate_ticket_data
@@ -17,7 +24,8 @@ def seed_tickets(
     *,
     simulation_date: date | None = None,
     count: int | None = None,
-    seed: int | None = None
+    seed: int | None = None,
+    used_address_keys: set[str] | None = None,
     ) -> SeedResult:
     """Fill the production ``tickets`` table directly.
 
@@ -31,8 +39,9 @@ def seed_tickets(
         Optional exact ticket count. When omitted, the scenario min/max is used.
     seed:
         Optional random seed for reproducible simulator output.
-    config_path:
-        Optional path to a scenario JSON file.
+    used_address_keys:
+        Optional set shared across simulator seeders to prevent duplicate
+        generated ticket addresses in one API generation run.
     """
     scenario = get_scenario(scenario_id)
     rng = make_rng(seed)
@@ -48,6 +57,9 @@ def seed_tickets(
     with session_scope() as session:
         clear_rows_by_description_marker(session, Ticket, "Simulator ticket voor scenario")
         branch = get_branch_by_name(session, scenario.branch_name)
+        reserved_location_ids = simulator_reserved_location_ids(session)
+        reserved_address_keys = simulator_reserved_address_keys(session)
+        used_keys = used_address_keys if used_address_keys is not None else set()
 
         for _ in range(ticket_count):
             created_at = random_datetime_between(rng, start_at, end_at)
@@ -63,6 +75,9 @@ def seed_tickets(
                 rng,
                 branch,
                 radius_km=None,
+                excluded_location_ids=reserved_location_ids,
+                excluded_address_keys=reserved_address_keys,
+                used_address_keys=used_keys,
             )
 
             ticket = Ticket(

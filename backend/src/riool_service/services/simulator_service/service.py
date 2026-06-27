@@ -193,16 +193,20 @@ def generate_scenario_tickets(session: Session, scenario_id: str, seed: int | No
     # The existing seeders own their own DB sessions, so commit any API work first.
     effective_seed = seed if seed is not None else scenario.seed
 
+    used_address_keys: set[str] = set()
+
     normal_result = seed_tickets(
         scenario.scenario_id,
         simulation_date=simulation_day,
         seed=effective_seed,
+        used_address_keys=used_address_keys,
     )
 
     simulation_result = seed_simulation_tickets(
         scenario.scenario_id,
         simulation_date=simulation_day,
         seed=None if effective_seed is None else effective_seed + 1,
+        used_address_keys=used_address_keys,
     )
 
     state = session.get(SimulationState, DEFAULT_STATE_ID)

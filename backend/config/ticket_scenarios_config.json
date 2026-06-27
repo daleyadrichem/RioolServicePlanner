@@ -10,8 +10,8 @@
       "percentage_mid_prio": 30,
       "percentage_laag_prio": 45,
       "requirements_percentages": {
-        "ladder": 20,
-        "veer": 35,
+        "ladder": 15,
+        "veer": 15,
         "supplies": 15
       },
       "aantal_tickets_min": 30,
