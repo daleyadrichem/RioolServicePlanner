@@ -33,6 +33,7 @@ class TicketStatus(str, Enum):
     OPEN = "OPEN"
     PLANNED = "PLANNED"
     IN_PROGRESS = "IN_PROGRESS"
+    DELAYED = "DELAYED"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
 

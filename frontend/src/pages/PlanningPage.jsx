@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, Clock, Gauge, Loader2, MoreVertical, RotateCw, Route, Ticket, User, Waves } from 'lucide-react';
+import { AlertTriangle, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock, Gauge, Hourglass, Loader2, MoreVertical, RotateCw, Route, Ticket, User, Waves } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
@@ -145,15 +145,22 @@ function PlanningJob({ item, columnStartMinutes }) {
   const isTravel = item.type === 'TRAVEL';
   const isTicket = item.type === 'TICKET';
   const isRequirementPickup = item.type === 'REQUIREMENT_PICKUP';
+  const assignmentStatus = String(item.assignment_status || '').toUpperCase();
+  const isCompleted = isTicket && assignmentStatus === 'COMPLETED';
+  const isInProgress = isTicket && assignmentStatus === 'IN_PROGRESS';
 
   return (
-    <div className={`job ${toneForItem(item)}`} style={itemGridStyle(item, columnStartMinutes)}>
+    <div className={`job ${toneForItem(item)}${isCompleted ? ' completed' : ''}${isInProgress ? ' inProgress' : ''}`} style={itemGridStyle(item, columnStartMinutes)}>
       <div>
         {isTravel ? (
           <b>Rijtijd: {item.duration_minutes}min</b>
         ) : (
           <>
-            <b>{isTicket && item.ticket_display_id ? `${item.ticket_display_id} · ${item.title}` : item.title}</b>
+            <b className={isTicket ? 'planningTicketTitle' : undefined}>
+              {isCompleted && <CheckCircle2 size={14} aria-label="Afgerond" />}
+              {isInProgress && <Hourglass size={14} aria-label="Bezig" />}
+              <span>{isTicket && item.ticket_display_id ? `${item.ticket_display_id} · ${item.title}` : item.title}</span>
+            </b>
             {item.address && <strong>{item.address}</strong>}
             <small>{item.start} - {item.end} · {item.duration_minutes} min</small>
             {isTicket && <small>Kenmerken: {characteristicsLabel(item)}</small>}

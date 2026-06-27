@@ -409,6 +409,14 @@ body.waitingCursor * {
   min-height:0;
   align-self:stretch;
 }
+
+.job.completed{opacity:.86;}
+.job.completed b{color:#159447;}
+.job.inProgress b{color:#ff7900;}
+.planningTicketTitle{display:flex!important;align-items:center;gap:5px;}
+.planningTicketTitle svg{flex:0 0 auto;}
+.job.completed .planningTicketTitle svg{color:#159447;}
+.job.inProgress .planningTicketTitle svg{color:#ff7900;}
 .hourlyJobs .job.travel{
   background:#eef1f5;
   border:1px dashed #c8d1df;
@@ -599,3 +607,111 @@ body.waitingCursor * {
   .planningDateSelector{flex-wrap:wrap;}
   .planningDateCurrent{order:-1;width:100%;}
 }
+
+/* Technician simulator */
+.simLayout{
+  grid-template-columns:minmax(520px,1fr) minmax(210px,250px) minmax(320px,380px);
+  grid-template-areas:"table form mechanics" "table activity mechanics";
+  align-items:start;
+}
+.newTicket .checks{
+  flex-direction:column;
+  gap:8px;
+}
+.newTicket .formActions{
+  grid-template-columns:1fr;
+  gap:10px;
+}
+.mechanicSimulator{
+  grid-area:mechanics;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:white;
+  box-shadow:var(--shadow);
+  padding:14px;
+}
+.mechanicHeader{
+  margin-bottom:12px;
+}
+.mechanicHeader h2{
+  margin:0 0 4px;
+  font-size:18px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.mechanicHeader small{
+  color:var(--muted);
+  font-weight:700;
+}
+.mechanicList{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.mechanicCard{
+  border:1px solid #e5edf7;
+  border-left:4px solid #cbd5e1;
+  border-radius:10px;
+  padding:12px;
+  background:#fbfcff;
+}
+.mechanicCard.urgent{border-left-color:#f5222d;background:#fff8f8;}
+.mechanicCard.medium{border-left-color:#ff8b00;background:#fffaf3;}
+.mechanicCard.low{border-left-color:#17944b;background:#f6fff8;}
+.mechanicCard.travel{border-left-color:#7453d4;background:#faf7ff;}
+.mechanicCard.break{border-left-color:#64748b;}
+.mechanicCardTop{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.mechanicCardTop b,
+.mechanicCardTop span{
+  display:block;
+}
+.mechanicCardTop b{font-size:14px;color:#17203a;}
+.mechanicCardTop span{font-size:12px;color:#52627f;font-weight:800;margin-top:2px;}
+.mechanicTicket{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  margin:10px 0;
+}
+.mechanicTicket strong{font-size:13px;color:#17203a;}
+.mechanicTicket small{font-size:12px;color:#62708e;font-weight:700;}
+.endTimeControl{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  font-size:12px;
+  font-weight:800;
+  color:#415171;
+}
+.endTimeControl label{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.endTimeControl span{
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:8px;
+}
+.endTimeControl .fieldInput{height:38px;width:100%;}
+.endTimeControl button{
+  border:1px solid var(--blue);
+  background:var(--blue);
+  color:white;
+  border-radius:8px;
+  font-weight:800;
+  padding:0 12px;
+}
+@media (max-width: 1280px){
+  .simLayout{
+    grid-template-columns:1fr;
+    grid-template-areas:"mechanics" "form" "table" "activity";
+  }
+}
+

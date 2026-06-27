@@ -89,6 +89,30 @@ TERMINAL_TICKET_STATUSES = {TicketStatus.COMPLETED, TicketStatus.CANCELLED}
 VISIBLE_ASSIGNMENT_STATUSES = {
     PlanningAssignmentStatus.PLANNED,
     PlanningAssignmentStatus.IN_PROGRESS,
+    PlanningAssignmentStatus.DRIVING,
+    PlanningAssignmentStatus.COMPLETED,
+}
+# Assignments that must remain part of the incremental replanning base.
+# COMPLETED assignments are intentionally included here so a same-day urgent
+# replanning run cannot reuse a time slot that has already happened.
+REPLANNING_BASE_ASSIGNMENT_STATUSES = {
+    PlanningAssignmentStatus.PLANNED,
+    PlanningAssignmentStatus.DRIVING,
+    PlanningAssignmentStatus.IN_PROGRESS,
+    PlanningAssignmentStatus.COMPLETED,
+}
+# Operationally fixed work.  The incremental replanner may preserve/copy these
+# assignments into a new run, but it must not insert work before them, move them
+# to another technician/day, defer them, or overwrite their ticket status.
+LOCKED_ASSIGNMENT_STATUSES = {
+    PlanningAssignmentStatus.DRIVING,
+    PlanningAssignmentStatus.IN_PROGRESS,
+    PlanningAssignmentStatus.COMPLETED,
+}
+LOCKED_TICKET_STATUSES = {
+    TicketStatus.IN_PROGRESS,
+    TicketStatus.DELAYED,
+    TicketStatus.COMPLETED,
 }
 ACTIVE_PLANNING_RUN_STATUSES = {PlanningRunStatus.PENDING, PlanningRunStatus.RUNNING}
 
@@ -372,7 +396,7 @@ def plan_new_ticket_incrementally(
         len(technicians),
         [technician.id for technician in technicians],
     )
-    active_assignments = _overview_assignments(session, latest_run.id)
+    active_assignments = _replanning_base_assignments(session, latest_run.id)
     logger.debug(
         "Incremental replanner loaded %s visible active assignment(s) from latest_run_id=%s",
         len(active_assignments),
@@ -461,6 +485,12 @@ def plan_new_ticket_incrementally(
         base_date=base_date,
         horizon_days=horizon_days,
     )
+    locked_min_positions_by_day = _locked_min_insert_positions_by_day(
+        active_assignments,
+        technicians,
+        base_date=base_date,
+        horizon_days=horizon_days,
+    )
     original_today = _original_today_assignment_map(active_assignments, base_date)
     logger.debug(
         "Incremental replanner base_date=%s horizon_days=%s original_today_assignments=%s",
@@ -483,6 +513,7 @@ def plan_new_ticket_incrementally(
             target_day_index=target_day_index,
             horizon_days=horizon_days,
             original_today=original_today,
+            locked_min_positions_by_day=locked_min_positions_by_day,
         )
         if candidate is not None:
             logger.debug(
@@ -525,6 +556,7 @@ def plan_new_ticket_incrementally(
             new_ticket=new_ticket_input,
             horizon_days=horizon_days,
             original_today=original_today,
+            locked_min_positions_by_day=locked_min_positions_by_day,
         )
         for candidate in tail_candidates:
             logger.debug(
@@ -835,6 +867,95 @@ def _optimizer_from_routes(
     return optimizer, solution
 
 
+
+
+def _assignment_is_locked_for_incremental_replanning(assignment: PlanningAssignment) -> bool:
+    """Return True when an assignment is operationally immutable.
+
+    Driving and working states are represented by IN_PROGRESS in the current
+    backend model.  COMPLETED is also immutable: once a technician has finished
+    a stop, an urgent replanning run must not reuse that historical time slot.
+    Manual planner locks are treated the same way.
+    """
+    ticket_status = assignment.ticket.status if assignment.ticket is not None else None
+    return bool(
+        assignment.locked_by_planner
+        or assignment.status in LOCKED_ASSIGNMENT_STATUSES
+        or ticket_status in LOCKED_TICKET_STATUSES
+    )
+
+
+def _locked_min_insert_positions_by_day(
+    assignments: list[PlanningAssignment],
+    technicians: list[Any],
+    *,
+    base_date: date,
+    horizon_days: int,
+) -> dict[int, dict[int, int]]:
+    """Earliest allowed insertion index per day/technician.
+
+    The value is one past the last locked assignment in that technician's route.
+    This preserves the locked route prefix exactly: no new urgent ticket can be
+    inserted before a technician is driving to, working on, or has finished a
+    ticket, and tail-deferral cannot remove work from that fixed prefix.
+    """
+    result: dict[int, dict[int, int]] = {
+        day_index: {technician.id: 0 for technician in technicians}
+        for day_index in range(horizon_days)
+    }
+    grouped: dict[tuple[int, int], list[PlanningAssignment]] = {}
+    for assignment in assignments:
+        if assignment.planned_start_at is None:
+            continue
+        day_index = (assignment.planned_start_at.date() - base_date).days
+        if 0 <= day_index < horizon_days:
+            grouped.setdefault((day_index, assignment.technician_id), []).append(assignment)
+
+    for (day_index, technician_id), items in grouped.items():
+        ordered = sorted(items, key=lambda item: (item.planned_start_at, item.sequence_order, item.id))
+        for position, assignment in enumerate(ordered):
+            if _assignment_is_locked_for_incremental_replanning(assignment):
+                result[day_index][technician_id] = max(result[day_index].get(technician_id, 0), position + 1)
+    return result
+
+
+def _best_locked_safe_insertion(
+    optimizer: InitialRouteOptimizer,
+    solution: PlanningSolution,
+    ticket: TicketInput,
+    *,
+    min_position_by_technician: dict[int, int],
+    technician_ids: list[int] | None = None,
+    allow_low_priority: bool,
+    allow_non_improving: bool = False,
+) -> Any | None:
+    """Find the best insertion without touching each route's locked prefix."""
+    best = None
+    candidate_technician_ids = technician_ids or list(solution.routes)
+    for technician_id in candidate_technician_ids:
+        route = solution.routes[technician_id]
+        if not optimizer._can_do(route.technician, ticket):  # noqa: SLF001
+            continue
+        min_position = max(0, min_position_by_technician.get(technician_id, 0))
+        for position in range(min_position, len(route.ticket_ids) + 1):
+            insertion = optimizer._evaluate_insertion(solution, route, ticket, position)  # noqa: SLF001
+            if insertion is None:
+                continue
+            if ticket.is_low_priority and not allow_low_priority:
+                continue
+            if best is None or insertion.score_delta < best.score_delta:
+                best = insertion
+
+    if (
+        best is not None
+        and not allow_non_improving
+        and not optimizer.config.apply_unplanned_base_penalty
+        and best.score_delta >= 0
+    ):
+        return None
+    return best
+
+
 def _incremental_direct_candidate(
     *,
     config: PlanningConfig,
@@ -846,6 +967,7 @@ def _incremental_direct_candidate(
     target_day_index: int,
     horizon_days: int,
     original_today: dict[int, tuple[int, datetime]],
+    locked_min_positions_by_day: dict[int, dict[int, int]],
 ) -> dict[str, Any] | None:
     day_results: dict[int, tuple[InitialRouteOptimizer, PlanningSolution]] = {}
     for day_index in range(horizon_days):
@@ -860,7 +982,14 @@ def _incremental_direct_candidate(
         day_results[day_index] = (optimizer, solution)
 
     optimizer, solution = day_results[target_day_index]
-    insertion = optimizer._best_insertion(solution, new_ticket, allow_low_priority=True, allow_non_improving=True)  # noqa: SLF001
+    insertion = _best_locked_safe_insertion(
+        optimizer,
+        solution,
+        new_ticket,
+        min_position_by_technician=locked_min_positions_by_day.get(target_day_index, {}),
+        allow_low_priority=True,
+        allow_non_improving=True,
+    )
     if insertion is None:
         return None
     solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, new_ticket.id)
@@ -888,6 +1017,7 @@ def _incremental_minimal_tail_deferral_candidates(
     new_ticket: TicketInput,
     horizon_days: int,
     original_today: dict[int, tuple[int, datetime]],
+    locked_min_positions_by_day: dict[int, dict[int, int]],
 ) -> list[dict[str, Any]]:
     """Return bounded urgent-insert candidates by pushing only route tail work.
 
@@ -904,7 +1034,8 @@ def _incremental_minimal_tail_deferral_candidates(
         if not new_ticket.requirement_codes.issubset(technician.requirement_codes):
             continue
         original_route = day0_routes.get(technician.id, [])
-        for position in range(len(original_route) + 1):
+        min_position = locked_min_positions_by_day.get(0, {}).get(technician.id, 0)
+        for position in range(min_position, len(original_route) + 1):
             routes_by_day = {
                 day_index: {technician_id: ids[:] for technician_id, ids in routes.items()}
                 for day_index, routes in base_routes_by_day.items()
@@ -931,7 +1062,8 @@ def _incremental_minimal_tail_deferral_candidates(
                     (
                         idx
                         for idx in range(len(route_ids) - 1, -1, -1)
-                        if route_ids[idx] != new_ticket.id
+                        if idx >= min_position
+                        and route_ids[idx] != new_ticket.id
                         and ticket_inputs_by_id[route_ids[idx]].urgency != TicketUrgency.URGENT
                     ),
                     None,
@@ -971,6 +1103,7 @@ def _incremental_minimal_tail_deferral_candidates(
                 moved_ticket_ids=moved_ticket_ids,
                 start_day_index=1,
                 horizon_days=horizon_days,
+                locked_min_positions_by_day=locked_min_positions_by_day,
             ):
                 logger.debug(
                     "Incremental replanner tail candidate rejected: ticket_id=%s technician_id=%s position=%s reason=moved_tickets_do_not_fit_future_days moved=%s",
@@ -1004,6 +1137,7 @@ def _place_moved_tickets_greedily(
     moved_ticket_ids: list[int],
     start_day_index: int,
     horizon_days: int,
+    locked_min_positions_by_day: dict[int, dict[int, int]],
 ) -> bool:
     for moved_ticket_id in moved_ticket_ids:
         moved_ticket = ticket_inputs_by_id[moved_ticket_id]
@@ -1022,7 +1156,14 @@ def _place_moved_tickets_greedily(
                 routes_for_day=routes_for_day,
                 extra_ticket_ids={moved_ticket_id},
             )
-            insertion = optimizer._best_insertion(solution, moved_ticket, allow_low_priority=True, allow_non_improving=True)  # noqa: SLF001
+            insertion = _best_locked_safe_insertion(
+                optimizer,
+                solution,
+                moved_ticket,
+                min_position_by_technician=locked_min_positions_by_day.get(day_index, {}),
+                allow_low_priority=True,
+                allow_non_improving=True,
+            )
             if insertion is None:
                 continue
             solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, moved_ticket_id)
@@ -1108,6 +1249,28 @@ def _persist_incremental_plan(
         latest_run.id,
         new_ticket.id,
     )
+
+    # Preserve operational state from the plan we are superseding.  Incremental
+    # replanning creates a new planning run containing the full route, so the
+    # old visible assignments are marked MOVED for history.  Without carrying
+    # these statuses forward, tickets/assignments that are already in progress
+    # are recreated as PLANNED and the ticket status is overwritten below.
+    previous_assignments = _replanning_base_assignments(session, latest_run.id)
+    previous_assignment_by_ticket_id = {
+        assignment.ticket_id: assignment
+        for assignment in previous_assignments
+        if assignment.ticket_id is not None
+    }
+    previous_assignment_status_by_ticket_id = {
+        ticket_id: assignment.status
+        for ticket_id, assignment in previous_assignment_by_ticket_id.items()
+    }
+    previous_ticket_status_by_ticket_id = {
+        assignment.ticket_id: assignment.ticket.status
+        for assignment in previous_assignments
+        if assignment.ticket_id is not None and assignment.ticket is not None
+    }
+
     _move_existing_active_assignments(session, branch_id)
     planning_run = PlanningRun(
         branch_id=branch_id,
@@ -1137,25 +1300,89 @@ def _persist_incremental_plan(
             sequence_by_technician.setdefault(technician_id, 1)
             stops = optimizer.build_stops(solution, technician_id)
             for stop in stops:
+                previous_assignment = previous_assignment_by_ticket_id.get(stop.ticket.id)
+                locked_previous_assignment = (
+                    previous_assignment
+                    if previous_assignment is not None
+                    and _assignment_is_locked_for_incremental_replanning(previous_assignment)
+                    else None
+                )
                 assignment = PlanningAssignment(
                     planning_run_id=planning_run.id,
                     branch_id=branch_id,
                     technician_id=technician_id,
                     ticket_id=stop.ticket.id,
                     sequence_order=sequence_by_technician[technician_id],
-                    planned_start_at=stop.planned_start_at,
-                    planned_end_at=stop.planned_end_at,
-                    estimated_duration_minutes=stop.ticket.service_minutes,
-                    estimated_travel_minutes_before=stop.travel_minutes_before,
-                    estimated_distance_km_before=stop.distance_km_before,
-                    requires_hq_pickup=stop.requires_hq_pickup,
-                    hq_location_id=stop.hq_location_id,
-                    estimated_travel_minutes_to_hq=stop.travel_minutes_to_hq,
-                    estimated_distance_km_to_hq=stop.distance_km_to_hq,
-                    estimated_travel_minutes_hq_to_ticket=stop.travel_minutes_hq_to_ticket,
-                    estimated_distance_km_hq_to_ticket=stop.distance_km_hq_to_ticket,
-                    status=PlanningAssignmentStatus.PLANNED,
-                    source=PlanningAssignmentSource.AI,
+                    planned_start_at=(
+                        locked_previous_assignment.planned_start_at
+                        if locked_previous_assignment is not None
+                        else stop.planned_start_at
+                    ),
+                    planned_end_at=(
+                        locked_previous_assignment.planned_end_at
+                        if locked_previous_assignment is not None
+                        else stop.planned_end_at
+                    ),
+                    estimated_duration_minutes=(
+                        locked_previous_assignment.estimated_duration_minutes
+                        if locked_previous_assignment is not None
+                        else stop.ticket.service_minutes
+                    ),
+                    estimated_travel_minutes_before=(
+                        locked_previous_assignment.estimated_travel_minutes_before
+                        if locked_previous_assignment is not None
+                        else stop.travel_minutes_before
+                    ),
+                    estimated_distance_km_before=(
+                        locked_previous_assignment.estimated_distance_km_before
+                        if locked_previous_assignment is not None
+                        else stop.distance_km_before
+                    ),
+                    requires_hq_pickup=(
+                        locked_previous_assignment.requires_hq_pickup
+                        if locked_previous_assignment is not None
+                        else stop.requires_hq_pickup
+                    ),
+                    hq_location_id=(
+                        locked_previous_assignment.hq_location_id
+                        if locked_previous_assignment is not None
+                        else stop.hq_location_id
+                    ),
+                    estimated_travel_minutes_to_hq=(
+                        locked_previous_assignment.estimated_travel_minutes_to_hq
+                        if locked_previous_assignment is not None
+                        else stop.travel_minutes_to_hq
+                    ),
+                    estimated_distance_km_to_hq=(
+                        locked_previous_assignment.estimated_distance_km_to_hq
+                        if locked_previous_assignment is not None
+                        else stop.distance_km_to_hq
+                    ),
+                    estimated_travel_minutes_hq_to_ticket=(
+                        locked_previous_assignment.estimated_travel_minutes_hq_to_ticket
+                        if locked_previous_assignment is not None
+                        else stop.travel_minutes_hq_to_ticket
+                    ),
+                    estimated_distance_km_hq_to_ticket=(
+                        locked_previous_assignment.estimated_distance_km_hq_to_ticket
+                        if locked_previous_assignment is not None
+                        else stop.distance_km_hq_to_ticket
+                    ),
+                    status=previous_assignment_status_by_ticket_id.get(
+                        stop.ticket.id,
+                        PlanningAssignmentStatus.PLANNED,
+                    ),
+                    source=(
+                        locked_previous_assignment.source
+                        if locked_previous_assignment is not None
+                        else PlanningAssignmentSource.AI
+                    ),
+                    locked_by_planner=(previous_assignment.locked_by_planner if previous_assignment is not None else False),
+                    manual_override_reason=(
+                        previous_assignment.manual_override_reason
+                        if previous_assignment is not None
+                        else None
+                    ),
                 )
                 session.add(assignment)
                 planned_ticket_ids.append(stop.ticket.id)
@@ -1165,7 +1392,11 @@ def _persist_incremental_plan(
 
     if planned_ticket_ids:
         for planned_ticket in session.query(Ticket).filter(Ticket.id.in_(planned_ticket_ids)).all():
-            planned_ticket.status = TicketStatus.PLANNED
+            previous_status = previous_ticket_status_by_ticket_id.get(planned_ticket.id)
+            if previous_status in LOCKED_TICKET_STATUSES or previous_status == TicketStatus.CANCELLED:
+                planned_ticket.status = previous_status
+            elif planned_ticket.status in {TicketStatus.OPEN, TicketStatus.PLANNED}:
+                planned_ticket.status = TicketStatus.PLANNED
 
     planning_run.status = PlanningRunStatus.COMPLETED
     planning_run.completed_at = datetime.utcnow()
@@ -1253,6 +1484,31 @@ def _overview_assignments(session: Session, planning_run_id: int | None) -> list
             .where(
                 PlanningAssignment.planning_run_id == planning_run_id,
                 PlanningAssignment.status.in_(list(VISIBLE_ASSIGNMENT_STATUSES)),
+            )
+            .order_by(PlanningAssignment.technician_id, PlanningAssignment.sequence_order)
+        ).unique().all()
+    )
+
+
+
+
+def _replanning_base_assignments(session: Session, planning_run_id: int | None) -> list[PlanningAssignment]:
+    if planning_run_id is None:
+        return []
+    return list(
+        session.scalars(
+            select(PlanningAssignment)
+            .options(
+                joinedload(PlanningAssignment.technician),
+                joinedload(PlanningAssignment.ticket).joinedload(Ticket.subject),
+                joinedload(PlanningAssignment.ticket).joinedload(Ticket.location),
+                joinedload(PlanningAssignment.ticket)
+                .joinedload(Ticket.ticket_requirements)
+                .joinedload(TicketRequirement.requirement),
+            )
+            .where(
+                PlanningAssignment.planning_run_id == planning_run_id,
+                PlanningAssignment.status.in_(list(REPLANNING_BASE_ASSIGNMENT_STATUSES)),
             )
             .order_by(PlanningAssignment.technician_id, PlanningAssignment.sequence_order)
         ).unique().all()

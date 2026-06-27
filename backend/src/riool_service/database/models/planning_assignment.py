@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 class PlanningAssignmentStatus(str, Enum):
     PLANNED = "PLANNED"
+    DRIVING = "DRIVING"
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"

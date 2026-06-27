@@ -20,6 +20,7 @@ from riool_service.database.models.requirement import Requirement as _Requiremen
 from riool_service.database.models.route_cache import RouteCache as _RouteCache  # noqa: F401
 from riool_service.database.models.simulation_tickets import SimulationTicket as _SimulationTicket  # noqa: F401
 from riool_service.database.models.simulation_state import SimulationState as _SimulationState  # noqa: F401
+from riool_service.database.models.simulated_technician import SimulatedTechnicianState as _SimulatedTechnicianState  # noqa: F401
 from riool_service.database.models.technician import Technician as _Technician  # noqa: F401
 from riool_service.database.models.technician_requirement import (  # noqa: F401
     TechnicianRequirement as _TechnicianRequirement,
@@ -73,8 +74,49 @@ def create_schema(engine: Engine) -> None:
     small backwards-compatible upgrades here until formal migrations are added.
     """
     Base.metadata.create_all(engine)
+    _ensure_planning_assignment_status_enum_values(engine)
+    _ensure_ticket_status_enum_values(engine)
     _ensure_technician_home_location_column(engine)
     _ensure_planning_assignment_hq_columns(engine)
+    _ensure_simulated_technician_state_scope_column(engine)
+
+
+def _ensure_planning_assignment_status_enum_values(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "DO $$ BEGIN "
+                "IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'planning_assignment_status') "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                "WHERE t.typname = 'planning_assignment_status' AND e.enumlabel = 'DRIVING'"
+                ") THEN "
+                "ALTER TYPE planning_assignment_status ADD VALUE 'DRIVING' AFTER 'PLANNED'; "
+                "END IF; "
+                "END $$;"
+            )
+        )
+
+
+def _ensure_ticket_status_enum_values(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "DO $$ BEGIN "
+                "IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ticket_status') "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                "WHERE t.typname = 'ticket_status' AND e.enumlabel = 'DELAYED'"
+                ") THEN "
+                "ALTER TYPE ticket_status ADD VALUE 'DELAYED' AFTER 'IN_PROGRESS'; "
+                "END IF; "
+                "END $$;"
+            )
+        )
 
 
 def _ensure_technician_home_location_column(engine: Engine) -> None:
@@ -163,3 +205,22 @@ def _ensure_planning_assignment_hq_columns(engine: Engine) -> None:
                         "FOREIGN KEY (hq_location_id) REFERENCES locations(id)"
                     )
                 )
+
+
+def _ensure_simulated_technician_state_scope_column(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if "simulated_technician_states" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("simulated_technician_states")}
+    if "simulated_time_applies_to" in columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE simulated_technician_states ADD COLUMN simulated_time_applies_to VARCHAR(32)"))
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_simulated_technician_states_simulated_time_applies_to "
+                "ON simulated_technician_states (simulated_time_applies_to)"
+            )
+        )

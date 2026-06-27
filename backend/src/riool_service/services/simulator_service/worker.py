@@ -34,11 +34,12 @@ def run_worker(poll_interval_seconds: float = 1.0) -> None:
             with session_scope() as session:
                 result = worker_tick(session)
                 logger.info(
-                    "Worker tick | status=%s | simulation_time=%s | advanced=%s | injected=%s",
+                    "Worker tick | status=%s | simulation_time=%s | advanced=%s | injected=%s | assignment_status_updates=%s",
                     result.get("status"),
                     result.get("current_simulation_time"),
                     result.get("advanced"),
                     result.get("injected_count"),
+                    result.get("assignment_status_updates"),
                 )
                 if result.get("injected_count"):
                     logger.info(

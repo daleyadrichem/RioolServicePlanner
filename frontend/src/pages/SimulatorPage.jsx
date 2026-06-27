@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronDown, Clock, Edit, FolderOpen, HelpCircle, Pause, Play, Plus, Save, SlidersHorizontal, Square, Ticket, Trash2 } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Clock, Edit, FolderOpen, HelpCircle, Pause, Play, Plus, Save, SlidersHorizontal, Square, Ticket, Trash2, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
@@ -261,7 +261,8 @@ function NewTicketPanel({ onSave, editingTicket, onCancelEdit, disabled, require
 
   return (
     <aside className={`newTicket ${disabled ? 'disabledPanel' : ''}`}>
-      <h2>{isEditing ? 'Ticket aanpassen' : 'Nieuw ticket'}</h2>
+      <h2>{isEditing ? 'Ticket injectie aanpassen' : 'Ticket injectie'}</h2>
+      <p className="panelHint">Compacte invoer: alleen injectietijd, urgentie en requirements.</p>
       {disabled && <p className="panelHint">Pauzeer de simulatie om simulator tickets toe te voegen of aan te passen.</p>}
       {checkingAddress && <p className="panelHint">Adres wordt gecontroleerd...</p>}
       <label>Injectietijd</label>
@@ -276,16 +277,6 @@ function NewTicketPanel({ onSave, editingTicket, onCancelEdit, disabled, require
       <select className="fieldInput" disabled={formDisabled} value={form.urgency} onChange={(event) => setField('urgency', event.target.value)}>
         <option value="urgent">Urgent</option><option value="medium">Normaal</option><option value="low">Laag</option>
       </select>
-      <label>Onderwerp</label>
-      <input className="fieldInput" disabled={formDisabled} value={form.subject} onChange={(event) => setField('subject', event.target.value)} />
-      <label>Adres</label>
-      <input
-        className="fieldInput"
-        disabled={formDisabled}
-        value={form.address}
-        placeholder="Kerkstraat 12, Den Bosch"
-        onChange={(event) => setField('address', event.target.value)}
-      />
       <label>Requirement</label>
       <div className="checks">
         {(requirements || []).map((requirement) => {
@@ -300,6 +291,76 @@ function NewTicketPanel({ onSave, editingTicket, onCancelEdit, disabled, require
         <Button disabled={!isEditing || formDisabled} onClick={handleCancel}>Annuleren</Button>
       </div>
     </aside>
+  );
+}
+
+
+function TechnicianSimulatorPanel({ technicians, onSave }) {
+  return (
+    <section className="mechanicSimulator">
+      <div className="mechanicHeader">
+        <h2><Wrench size={18} /> Monteur simulator</h2>
+        <small>Pas per monteur de gesimuleerde eindtijd aan.</small>
+      </div>
+      <div className="mechanicList">
+        {(technicians || []).map((row) => (
+          <TechnicianSimulatorCard key={row.technician.id} row={row} onSave={onSave} />
+        ))}
+        {(!technicians || technicians.length === 0) && <p className="panelHint">Geen monteurs of planning gevonden.</p>}
+      </div>
+    </section>
+  );
+}
+
+function TechnicianSimulatorCard({ row, onSave }) {
+  const [endTime, setEndTime] = useState(row.simulated_end_time || row.planned_end_time || '');
+
+  useEffect(() => {
+    setEndTime(row.simulated_end_time || row.planned_end_time || '');
+  }, [row.simulated_end_time, row.planned_end_time, row.planning_assignment_id]);
+
+  const ticket = row.current_ticket;
+  const statusClass = row.status_code === 'ticket'
+    ? toUrgencyApiValue(ticket?.urgency || 'medium')
+    : String(row.status_code || '').toLowerCase();
+
+  return (
+    <article className={`mechanicCard ${statusClass || 'idle'}`}>
+      <div className="mechanicCardTop">
+        <div>
+          <b>{row.technician.name}</b>
+          <span>{row.status}</span>
+        </div>
+        <Tag>{row.effective_minutes_remaining ?? '–'} min</Tag>
+      </div>
+      <div className="mechanicTicket">
+        {ticket ? (
+          <>
+            <strong>{ticket.ticket_display_id} · {ticket.subject}</strong>
+            <small>{row.planned_start_time || '–'}–{row.planned_end_time || '–'} gepland</small>
+          </>
+        ) : (
+          <>
+            <strong>Geen huidig ticket</strong>
+            <small>{row.planned_end_time ? `Volgende status tot ${row.planned_end_time}` : 'Geen actief routeblok'}</small>
+          </>
+        )}
+      </div>
+      <div className="endTimeControl">
+        <label>
+          Eindtijd simuleren
+          <span>
+            <input
+              type="time"
+              className="fieldInput"
+              value={endTime || ''}
+              onChange={(event) => setEndTime(event.target.value)}
+            />
+            <button type="button" onClick={() => onSave(row.technician.id, { end_time: endTime || null, planning_assignment_id: row.planning_assignment_id })}>OK</button>
+          </span>
+        </label>
+      </div>
+    </article>
   );
 }
 
@@ -318,6 +379,7 @@ export function SimulatorPage() {
   const loadInjections = useCallback(() => api.getInjections(), []);
   const loadScenarios = useCallback(() => api.getScenarios(), []);
   const loadRequirements = useCallback(() => api.getRequirements(), []);
+  const loadTechnicianSimulatorStates = useCallback(() => api.getTechnicianSimulatorStates(), []);
   const { data: state, loading, error, reload: reloadState } = useApi(loadState, emptySimulatorState);
   const { data: injections, reload: reloadInjections } = useApi(loadInjections, []);
   const { data: scenarios } = useApi(loadScenarios, emptyScenarios);
@@ -326,6 +388,7 @@ export function SimulatorPage() {
     { code: 'VEER', name: 'Trekveer' },
     { code: 'SUPPLIES', name: 'Benodigdheden' },
   ]);
+  const { data: technicianStates, reload: reloadTechnicianStates } = useApi(loadTechnicianSimulatorStates, []);
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
   const [filters, setFilters] = useState({ urgency: 'all', requirement: 'all' });
   const [editingTicket, setEditingTicket] = useState(null);
@@ -335,7 +398,8 @@ export function SimulatorPage() {
   const refresh = useCallback(async (options = {}) => {
     await reloadState(options);
     await reloadInjections(options);
-  }, [reloadState, reloadInjections]);
+    await reloadTechnicianStates(options);
+  }, [reloadState, reloadInjections, reloadTechnicianStates]);
   const runAction = async (action) => { try { await action(); await refresh(); } catch (err) { alert(err.message); } };
 
   useEffect(() => {
@@ -363,6 +427,10 @@ export function SimulatorPage() {
       return;
     }
     await runAction(() => api.createInjection(payload));
+  };
+
+  const saveTechnicianState = async (technicianId, payload) => {
+    await runAction(() => api.updateTechnicianSimulatorState(technicianId, payload));
   };
 
   return (
@@ -406,6 +474,7 @@ export function SimulatorPage() {
           onSave={saveSimulationTicket}
           requirements={requirements}
         />
+        <TechnicianSimulatorPanel technicians={technicianStates || []} onSave={saveTechnicianState} />
         <ActivityLog items={state.activity_log || []} />
       </div>
     </main>

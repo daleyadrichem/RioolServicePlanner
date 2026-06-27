@@ -17,3 +17,5 @@ from riool_service.database.models.planning_assignment import PlanningAssignment
 from riool_service.database.models.route_cache import RouteCache
 from riool_service.database.models.simulation_tickets import SimulationTicket
 from riool_service.database.models.simulation_state import SimulationState, SimulationStatus
+
+from riool_service.database.models.simulated_technician import SimulatedTechnicianState

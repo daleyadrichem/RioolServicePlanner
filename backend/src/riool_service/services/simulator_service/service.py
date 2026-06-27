@@ -13,12 +13,17 @@ from sqlalchemy.orm import Session, joinedload
 
 from riool_service.database.models.base import Base
 from riool_service.database.models.simulation_state import SimulationState, SimulationStatus
+from riool_service.database.models.simulated_technician import SimulatedTechnicianState
+from riool_service.database.models.technician import Technician
 from riool_service.database.models.simulation_tickets import SimulationTicket
 from riool_service.database.models.tickets import Ticket, TicketStatus, TicketUrgency
+from riool_service.database.models.planning_assignment import PlanningAssignment, PlanningAssignmentStatus
+from riool_service.database.models.planning_run import PlanningRun, PlanningRunStatus
 from riool_service.database.models.ticket_requirement import TicketRequirement
 from riool_service.database.models.branch import Branch
 from riool_service.database.models.location import Location
 from riool_service.database.db_utils import get_engine
+from riool_service.database_initializer.database import create_schema
 from riool_service.simulator.config import ScenarioConfig, TICKET_SCENARIOS_CONFIG_ENV_VAR, load_scenarios
 from riool_service.simulator.fill_simulation_tickets import seed_simulation_tickets
 from riool_service.simulator.fill_tickets import seed_tickets
@@ -52,8 +57,8 @@ class SimulationTicketNotFoundError(ValueError):
 
 
 def ensure_simulator_tables() -> None:
-    """Create simulator tables that may not exist yet in older local databases."""
-    Base.metadata.create_all(get_engine())
+    """Create simulator tables/columns that may not exist yet in older local databases."""
+    create_schema(get_engine())
 
 
 def _scenario_config_path() -> Path:
@@ -736,7 +741,7 @@ def inject_due_tickets(session: Session, state: SimulationState | None = None) -
 
 
 def worker_tick(session: Session) -> dict[str, Any]:
-    """One worker iteration: advance clock and inject due tickets."""
+    """One worker iteration: advance clock, inject due tickets, and update assignment progress."""
     state = get_or_create_state(session)
     if state.status != SimulationStatus.RUNNING:
         return {
@@ -744,14 +749,720 @@ def worker_tick(session: Session) -> dict[str, Any]:
             "advanced": False,
             "current_simulation_time": state.current_simulation_time.isoformat(),
             "injected_count": 0,
+            "assignment_status_updates": 0,
         }
 
     advance_state_clock(state)
     injected_count = inject_due_tickets(session, state)
+    assignment_status_updates = update_planning_assignment_statuses_for_simulation(session, state)
     session.flush()
     return {
         "status": state.status.value,
         "advanced": True,
         "current_simulation_time": state.current_simulation_time.isoformat(),
         "injected_count": injected_count,
+        "assignment_status_updates": assignment_status_updates,
     }
+
+
+# --------------------------
+# Technician progress simulator
+# --------------------------
+
+_VISIBLE_SIM_ASSIGNMENT_STATUSES = {
+    PlanningAssignmentStatus.PLANNED,
+    PlanningAssignmentStatus.DRIVING,
+    PlanningAssignmentStatus.IN_PROGRESS,
+    PlanningAssignmentStatus.COMPLETED,
+}
+
+_SIMULATED_TIME_SCOPE_DRIVING = "driving_to_ticket"
+_SIMULATED_TIME_SCOPE_TICKET = "ticket"
+_SIMULATED_TIME_SCOPES = {_SIMULATED_TIME_SCOPE_DRIVING, _SIMULATED_TIME_SCOPE_TICKET}
+
+
+def _latest_completed_planning_run_for_branch(session: Session, branch_id: int) -> PlanningRun | None:
+    return session.scalar(
+        select(PlanningRun)
+        .where(PlanningRun.branch_id == branch_id, PlanningRun.status == PlanningRunStatus.COMPLETED)
+        .order_by(PlanningRun.completed_at.desc().nullslast(), PlanningRun.id.desc())
+        .limit(1)
+    )
+
+
+def _parse_hhmm_on_simulation_day(state: SimulationState, value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = time.fromisoformat(str(value).strip())
+    except ValueError:
+        return None
+    return datetime.combine(state.current_simulation_time.date(), parsed)
+
+
+def _time_range_contains(state: SimulationState, start_hhmm: str | None, end_hhmm: str | None) -> bool:
+    start_at = _parse_hhmm_on_simulation_day(state, start_hhmm)
+    end_at = _parse_hhmm_on_simulation_day(state, end_hhmm)
+    if start_at is None or end_at is None:
+        return False
+    return start_at <= state.current_simulation_time < end_at
+
+
+def _minutes_until(state: SimulationState, end_hhmm: str | None) -> int | None:
+    end_at = _parse_hhmm_on_simulation_day(state, end_hhmm)
+    if end_at is None:
+        return None
+    return max(0, int(round((end_at - state.current_simulation_time).total_seconds() / 60)))
+
+
+def _assignment_status_for_item_type(item_type: str | None) -> PlanningAssignmentStatus | None:
+    if item_type == "travel":
+        return PlanningAssignmentStatus.DRIVING
+    if item_type == "ticket":
+        return PlanningAssignmentStatus.IN_PROGRESS
+    if item_type == "completed":
+        return PlanningAssignmentStatus.COMPLETED
+    return None
+
+
+def _simulation_datetimes_for_assignment(
+    state: SimulationState,
+    assignment: PlanningAssignment,
+) -> tuple[datetime, datetime, datetime]:
+    """Return travel_start, planned_start, planned_end on the active simulation date."""
+    current_time = state.current_simulation_time
+    planned_start = datetime.combine(current_time.date(), assignment.planned_start_at.time())
+    planned_end = datetime.combine(current_time.date(), assignment.planned_end_at.time())
+    if planned_end <= planned_start:
+        planned_end += timedelta(days=1)
+    travel_minutes = int(assignment.estimated_travel_minutes_before or 0)
+    travel_start = planned_start - timedelta(minutes=travel_minutes)
+    return travel_start, planned_start, planned_end
+
+
+def _current_phase_for_assignment(
+    state: SimulationState,
+    assignment: PlanningAssignment,
+) -> tuple[str | None, datetime | None, datetime | None, PlanningAssignmentStatus]:
+    """Return phase, phase_start, phase_end and status for one assignment."""
+    current_time = state.current_simulation_time
+    travel_start, planned_start, planned_end = _simulation_datetimes_for_assignment(state, assignment)
+
+    if travel_start <= current_time < planned_start and int(assignment.estimated_travel_minutes_before or 0) > 0:
+        return _SIMULATED_TIME_SCOPE_DRIVING, travel_start, planned_start, PlanningAssignmentStatus.DRIVING
+    if planned_start <= current_time < planned_end:
+        return _SIMULATED_TIME_SCOPE_TICKET, planned_start, planned_end, PlanningAssignmentStatus.IN_PROGRESS
+    if current_time >= planned_end:
+        return None, None, None, PlanningAssignmentStatus.COMPLETED
+    return None, None, None, PlanningAssignmentStatus.PLANNED
+
+
+def _simulation_status_for_assignment(
+    state: SimulationState,
+    assignment: PlanningAssignment,
+) -> PlanningAssignmentStatus:
+    """Return the assignment status that matches the current simulation time."""
+    return _current_phase_for_assignment(state, assignment)[3]
+
+
+
+
+def _simulation_status_for_assignment_with_technician_state(
+    state: SimulationState,
+    assignment: PlanningAssignment,
+    technician_state: SimulatedTechnicianState,
+) -> PlanningAssignmentStatus:
+    """Return status, respecting a delayed simulated phase as leading time."""
+    if (
+        technician_state.planning_assignment_id == assignment.id
+        and technician_state.simulated_time_applies_to in _SIMULATED_TIME_SCOPES
+        and technician_state.simulated_end_at is not None
+    ):
+        planned_phase_end = _planned_phase_end_for_scope(state, assignment, technician_state.simulated_time_applies_to)
+        if (
+            planned_phase_end is not None
+            and technician_state.simulated_end_at > planned_phase_end
+            and state.current_simulation_time < technician_state.simulated_end_at
+        ):
+            if technician_state.simulated_time_applies_to == _SIMULATED_TIME_SCOPE_DRIVING:
+                return PlanningAssignmentStatus.DRIVING
+            return PlanningAssignmentStatus.IN_PROGRESS
+    return _simulation_status_for_assignment(state, assignment)
+
+def _shift_assignment_schedule(assignment: PlanningAssignment, delta: timedelta, *, shift_start: bool, shift_end: bool) -> None:
+    if shift_start:
+        assignment.planned_start_at = assignment.planned_start_at + delta
+    if shift_end:
+        assignment.planned_end_at = assignment.planned_end_at + delta
+
+
+def _shift_later_assignments(assignments: list[PlanningAssignment], current_assignment: PlanningAssignment, delta: timedelta) -> None:
+    for later in assignments:
+        if later.sequence_order > current_assignment.sequence_order:
+            later.planned_start_at = later.planned_start_at + delta
+            later.planned_end_at = later.planned_end_at + delta
+
+
+def _planned_phase_end_for_scope(
+    state: SimulationState,
+    assignment: PlanningAssignment,
+    scope: str | None,
+) -> datetime | None:
+    _travel_start, planned_start, planned_end = _simulation_datetimes_for_assignment(state, assignment)
+    if scope == _SIMULATED_TIME_SCOPE_DRIVING:
+        return planned_start
+    if scope == _SIMULATED_TIME_SCOPE_TICKET:
+        return planned_end
+    return None
+
+
+def _is_delayed_override_active(
+    state: SimulationState,
+    assignment: PlanningAssignment,
+    technician_state: SimulatedTechnicianState,
+) -> bool:
+    """Return whether this assignment is being held by a delayed simulated end.
+
+    A delayed override belongs to exactly one assignment and one phase. While it
+    is active, that assignment is the technician's leading piece of work and all
+    later assignments for the same technician must stay planned, even if their
+    original planned time window has already arrived.
+    """
+    if (
+        technician_state.planning_assignment_id != assignment.id
+        or technician_state.simulated_time_applies_to not in _SIMULATED_TIME_SCOPES
+        or technician_state.simulated_end_at is None
+    ):
+        return False
+
+    planned_phase_end = _planned_phase_end_for_scope(state, assignment, technician_state.simulated_time_applies_to)
+    return (
+        planned_phase_end is not None
+        and technician_state.simulated_end_at > planned_phase_end
+        and state.current_simulation_time < technician_state.simulated_end_at
+    )
+
+
+def _delayed_override_anchor(
+    state: SimulationState,
+    assignments: list[PlanningAssignment],
+    technician_state: SimulatedTechnicianState,
+) -> PlanningAssignment | None:
+    by_id = {assignment.id: assignment for assignment in assignments}
+    assignment = by_id.get(technician_state.planning_assignment_id or 0)
+    if assignment is not None and _is_delayed_override_active(state, assignment, technician_state):
+        return assignment
+    return None
+
+
+def _ticket_status_for_assignment_status(
+    assignment_status: PlanningAssignmentStatus,
+    *,
+    delayed: bool,
+) -> TicketStatus:
+    if delayed:
+        return TicketStatus.DELAYED
+    if assignment_status == PlanningAssignmentStatus.IN_PROGRESS:
+        return TicketStatus.IN_PROGRESS
+    if assignment_status == PlanningAssignmentStatus.COMPLETED:
+        return TicketStatus.COMPLETED
+    return TicketStatus.PLANNED
+
+
+def _sync_ticket_status_for_assignment(
+    assignment: PlanningAssignment,
+    assignment_status: PlanningAssignmentStatus,
+    *,
+    delayed: bool = False,
+) -> int:
+    ticket = assignment.ticket
+    if ticket is None or ticket.status == TicketStatus.CANCELLED:
+        return 0
+
+    next_ticket_status = _ticket_status_for_assignment_status(assignment_status, delayed=delayed)
+    if ticket.status == next_ticket_status:
+        return 0
+    ticket.status = next_ticket_status
+    if next_ticket_status == TicketStatus.IN_PROGRESS and ticket.started_at is None:
+        ticket.started_at = assignment.planned_start_at
+    if next_ticket_status == TicketStatus.COMPLETED and ticket.completed_at is None:
+        ticket.completed_at = assignment.planned_end_at
+    if next_ticket_status != TicketStatus.COMPLETED:
+        ticket.completed_at = None
+    return 1
+
+
+def _apply_simulated_phase_end_for_technician(
+    *,
+    state: SimulationState,
+    technician_state: SimulatedTechnicianState,
+    assignments: list[PlanningAssignment],
+) -> int:
+    """Apply the frontend-provided simulated end time for the current drive/work phase.
+
+    The simulated end time is leading: a delayed phase must not progress at its
+    planned end, and an early phase may progress as soon as the simulated end is
+    reached. When that simulated boundary is reached, the current assignment and
+    all later assignments for the technician are shifted by the delta.
+    """
+    if not assignments:
+        if technician_state.planning_assignment_id is not None or technician_state.simulated_time_applies_to is not None:
+            technician_state.planning_assignment_id = None
+            technician_state.simulated_time_applies_to = None
+            technician_state.simulated_end_at = None
+            return 1
+        return 0
+
+    current_time = state.current_simulation_time
+    ordered = sorted(assignments, key=lambda row: (row.sequence_order, row.planned_start_at, row.id))
+    by_id = {row.id: row for row in ordered}
+    changed = 0
+
+    override_assignment = by_id.get(technician_state.planning_assignment_id or 0)
+    override_scope = technician_state.simulated_time_applies_to
+    simulated_end = technician_state.simulated_end_at
+
+    active_assignment: PlanningAssignment | None = None
+    active_scope: str | None = None
+    planned_phase_end: datetime | None = None
+
+    if override_assignment is not None and override_scope in _SIMULATED_TIME_SCOPES and simulated_end is not None:
+        override_planned_end = _planned_phase_end_for_scope(state, override_assignment, override_scope)
+        if override_planned_end is not None:
+            # The override belongs to the phase that was active when the user
+            # edited the simulated end time. Apply the resulting schedule delta
+            # at that exact simulated boundary before falling back to normal
+            # time-based detection. Without this, a delayed ticket that reached
+            # its simulated end could be skipped as already completed, causing
+            # the next ticket to be evaluated against its old timestamps.
+            if current_time >= simulated_end:
+                delta = simulated_end - override_planned_end
+                if delta != timedelta(0):
+                    if override_scope == _SIMULATED_TIME_SCOPE_DRIVING:
+                        # Driving ends at planned_start_at. Moving it also moves
+                        # the ticket work window and every later assignment.
+                        _shift_assignment_schedule(override_assignment, delta, shift_start=True, shift_end=True)
+                        _shift_later_assignments(ordered, override_assignment, delta)
+                    else:
+                        # Ticket work ends at planned_end_at. Its start stays
+                        # fixed, but its end and every later assignment move.
+                        _shift_assignment_schedule(override_assignment, delta, shift_start=False, shift_end=True)
+                        _shift_later_assignments(ordered, override_assignment, delta)
+                    changed += 1
+
+                technician_state.simulated_end_at = None
+                simulated_end = None
+                changed += 1
+            # If the override is a delay, keep this phase active past the planned
+            # boundary until the simulated end is reached. This prevents the normal
+            # time-based status calculation from completing it too early.
+            elif simulated_end > override_planned_end:
+                active_assignment = override_assignment
+                active_scope = override_scope
+                planned_phase_end = override_planned_end
+
+    if active_assignment is None:
+        for assignment in ordered:
+            phase, _phase_start, phase_end, status = _current_phase_for_assignment(state, assignment)
+            if status in {PlanningAssignmentStatus.DRIVING, PlanningAssignmentStatus.IN_PROGRESS}:
+                active_assignment = assignment
+                active_scope = phase
+                planned_phase_end = phase_end
+                break
+            if status == PlanningAssignmentStatus.PLANNED:
+                break
+
+    if active_assignment is None or active_scope is None or planned_phase_end is None:
+        # No active drive/job right now. Keep the row pointed at the next assignment
+        # for the UI, but clear any old override so it cannot affect the wrong phase.
+        next_assignment = next((row for row in ordered if row.status != PlanningAssignmentStatus.COMPLETED), None)
+        next_id = next_assignment.id if next_assignment is not None else None
+        if technician_state.planning_assignment_id != next_id:
+            technician_state.planning_assignment_id = next_id
+            changed += 1
+        if technician_state.simulated_time_applies_to is not None:
+            technician_state.simulated_time_applies_to = None
+            changed += 1
+        if technician_state.simulated_end_at is not None:
+            technician_state.simulated_end_at = None
+            changed += 1
+        return changed
+
+    if technician_state.planning_assignment_id != active_assignment.id:
+        technician_state.planning_assignment_id = active_assignment.id
+        technician_state.simulated_end_at = None
+        simulated_end = None
+        changed += 1
+    if technician_state.simulated_time_applies_to != active_scope:
+        technician_state.simulated_time_applies_to = active_scope
+        technician_state.simulated_end_at = None
+        simulated_end = None
+        changed += 1
+
+    if simulated_end is None:
+        return changed
+
+    # Only move the plan at the simulated boundary. For delays this means the
+    # assignment stays in the active phase until simulated_end, not planned_end.
+    if current_time < simulated_end:
+        return changed
+
+    delta = simulated_end - planned_phase_end
+    if delta == timedelta(0):
+        technician_state.simulated_end_at = None
+        return changed + 1
+
+    if active_scope == _SIMULATED_TIME_SCOPE_DRIVING:
+        # Driving ends at planned_start_at. Moving it also moves the ticket work
+        # window and every later assignment for this technician.
+        _shift_assignment_schedule(active_assignment, delta, shift_start=True, shift_end=True)
+        _shift_later_assignments(ordered, active_assignment, delta)
+    else:
+        # Ticket work ends at planned_end_at. The ticket start stays fixed, but
+        # its end and all later assignments move by the simulated delta.
+        _shift_assignment_schedule(active_assignment, delta, shift_start=False, shift_end=True)
+        _shift_later_assignments(ordered, active_assignment, delta)
+
+    technician_state.simulated_end_at = None
+    return changed + 1
+
+
+def update_planning_assignment_statuses_for_simulation(
+    session: Session,
+    state: SimulationState | None = None,
+    branch_id: int | None = None,
+) -> int:
+    """Persist simulated schedule shifts and assignment status transitions from the worker tick."""
+    state = state or get_or_create_state(session)
+    branch = _branch_for_state(session, state) if branch_id is None else session.get(Branch, int(branch_id))
+    if branch is None:
+        return 0
+
+    latest_run = _latest_completed_planning_run_for_branch(session, branch.id)
+    if latest_run is None:
+        return 0
+
+    assignments = list(
+        session.scalars(
+            select(PlanningAssignment)
+            .where(
+                PlanningAssignment.planning_run_id == latest_run.id,
+                PlanningAssignment.status.notin_([PlanningAssignmentStatus.CANCELLED, PlanningAssignmentStatus.MOVED]),
+            )
+            .order_by(PlanningAssignment.technician_id, PlanningAssignment.sequence_order, PlanningAssignment.id)
+        ).all()
+    )
+
+    by_technician: dict[int, list[PlanningAssignment]] = {}
+    for assignment in assignments:
+        by_technician.setdefault(assignment.technician_id, []).append(assignment)
+
+    updated_count = 0
+    for technician_id, technician_assignments in by_technician.items():
+        technician_state = _get_or_create_technician_state(session, technician_id)
+        updated_count += _apply_simulated_phase_end_for_technician(
+            state=state,
+            technician_state=technician_state,
+            assignments=technician_assignments,
+        )
+
+        delayed_anchor = _delayed_override_anchor(state, technician_assignments, technician_state)
+
+        for assignment in technician_assignments:
+            assignment_is_delayed_anchor = delayed_anchor is not None and assignment.id == delayed_anchor.id
+            assignment_is_blocked_later_work = (
+                delayed_anchor is not None
+                and assignment.sequence_order > delayed_anchor.sequence_order
+            )
+
+            if assignment_is_blocked_later_work:
+                next_status = PlanningAssignmentStatus.PLANNED
+            else:
+                next_status = _simulation_status_for_assignment_with_technician_state(state, assignment, technician_state)
+
+            if assignment.status != next_status:
+                assignment.status = next_status
+                updated_count += 1
+            updated_count += _sync_ticket_status_for_assignment(
+                assignment,
+                next_status,
+                delayed=assignment_is_delayed_anchor,
+            )
+
+    if updated_count:
+        session.flush()
+    return updated_count
+
+def _assignment_ticket_dict(
+    assignment: PlanningAssignment | None,
+    current_status: PlanningAssignmentStatus | None = None,
+) -> dict[str, Any] | None:
+    if assignment is None or assignment.ticket is None:
+        return None
+    ticket = assignment.ticket
+    status = current_status or assignment.status
+    return {
+        "assignment_id": assignment.id,
+        "ticket_id": ticket.id,
+        "ticket_display_id": f"T-{ticket.id:03d}",
+        "subject": ticket.subject.name if ticket.subject else "Onbekend",
+        "address": _ticket_address_from_real_ticket(ticket),
+        "urgency": _value(ticket.urgency),
+        "assignment_status": _value(status),
+    }
+
+
+def _ticket_address_from_real_ticket(ticket: Ticket) -> str:
+    location = ticket.location
+    if location is None:
+        return ""
+    if location.street and location.house_number and location.city:
+        return f"{location.street} {location.house_number}, {location.city}"
+    value = location.formatted_address or location.input_address or location.city or ""
+    parts = [part.strip() for part in str(value).split(",") if part.strip()]
+    return ", ".join(parts[:2]) if len(parts) > 2 else str(value).strip()
+
+
+def _mechanic_status_label(item_type: str | None, has_future_work: bool) -> str:
+    if item_type == "ticket":
+        return "Werkt aan ticket"
+    if item_type == "travel":
+        return "Onderweg"
+    if item_type == "requirement_pickup":
+        return "Hulpmiddelen ophalen"
+    if item_type == "break":
+        return "Pauze"
+    return "Wacht op volgende taak" if has_future_work else "Geen geplande taak"
+
+
+def _mechanic_status_code(item_type: str | None, has_future_work: bool) -> str:
+    if item_type in {"ticket", "travel", "requirement_pickup", "break"}:
+        return item_type
+    return "waiting" if has_future_work else "idle"
+
+
+def _default_simulated_time_scope(item_type: str | None) -> str | None:
+    if item_type == "travel":
+        return _SIMULATED_TIME_SCOPE_DRIVING
+    if item_type == "ticket":
+        return _SIMULATED_TIME_SCOPE_TICKET
+    return None
+
+
+def _normalize_simulated_time_scope(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "drive": _SIMULATED_TIME_SCOPE_DRIVING,
+        "driving": _SIMULATED_TIME_SCOPE_DRIVING,
+        "travel": _SIMULATED_TIME_SCOPE_DRIVING,
+        "driving_to_ticket": _SIMULATED_TIME_SCOPE_DRIVING,
+        "drive_to_ticket": _SIMULATED_TIME_SCOPE_DRIVING,
+        "towards_ticket": _SIMULATED_TIME_SCOPE_DRIVING,
+        "ticket": _SIMULATED_TIME_SCOPE_TICKET,
+        "work": _SIMULATED_TIME_SCOPE_TICKET,
+        "ticket_work": _SIMULATED_TIME_SCOPE_TICKET,
+        "ticket_itself": _SIMULATED_TIME_SCOPE_TICKET,
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in _SIMULATED_TIME_SCOPES:
+        raise ValueError("simulated_time_applies_to must be driving_to_ticket or ticket")
+    return normalized
+
+
+def _current_assignment_for_technician(
+    session: Session,
+    *,
+    state: SimulationState,
+    technician: Technician,
+    assignments: list[PlanningAssignment],
+) -> tuple[PlanningAssignment | None, str | None, str | None, str | None, bool]:
+    """Return current assignment, item type, planned start, planned end, has_future_work."""
+    sorted_assignments = sorted(assignments, key=lambda row: (row.planned_start_at, row.sequence_order, row.id))
+    current_time = state.current_simulation_time
+    has_future_work = any(row.planned_start_at and row.planned_start_at > current_time for row in sorted_assignments)
+    last_completed: tuple[PlanningAssignment, str, str] | None = None
+
+    for assignment in sorted_assignments:
+        # Compare by time-of-day on the active simulation date. This keeps the
+        # mechanic simulator useful even when a local demo database contains a
+        # plan generated on a different date than today's simulator clock.
+        planned_start = datetime.combine(current_time.date(), assignment.planned_start_at.time())
+        planned_end = datetime.combine(current_time.date(), assignment.planned_end_at.time())
+        if planned_end <= planned_start:
+            planned_end += timedelta(days=1)
+        travel_minutes = int(assignment.estimated_travel_minutes_before or 0)
+        travel_start = planned_start - timedelta(minutes=travel_minutes)
+        if travel_minutes > 0 and travel_start <= current_time < planned_start:
+            return assignment, "travel", travel_start.strftime("%H:%M"), planned_start.strftime("%H:%M"), True
+        if planned_start <= current_time < planned_end:
+            return assignment, "ticket", planned_start.strftime("%H:%M"), planned_end.strftime("%H:%M"), True
+        if assignment.status == PlanningAssignmentStatus.COMPLETED and current_time >= planned_end:
+            last_completed = (assignment, planned_start.strftime("%H:%M"), planned_end.strftime("%H:%M"))
+
+    if last_completed is not None:
+        assignment, planned_start, planned_end = last_completed
+        return assignment, "completed", planned_start, planned_end, has_future_work
+
+    return None, None, None, None, has_future_work
+
+
+def _get_or_create_technician_state(session: Session, technician_id: int) -> SimulatedTechnicianState:
+    row = session.scalar(
+        select(SimulatedTechnicianState).where(SimulatedTechnicianState.technician_id == technician_id).limit(1)
+    )
+    if row is not None:
+        return row
+    row = SimulatedTechnicianState(technician_id=technician_id)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def list_technician_simulation_states(session: Session, branch_id: int | None = None) -> list[dict[str, Any]]:
+    """Return the current simulator progress card for every active mechanic."""
+    state = get_or_create_state(session)
+    branch = _branch_for_state(session, state) if branch_id is None else session.get(Branch, int(branch_id))
+    if branch is None:
+        return []
+
+    technicians = list(
+        session.scalars(
+            select(Technician)
+            .where(Technician.branch_id == branch.id)
+            .order_by(Technician.name.asc(), Technician.id.asc())
+        ).all()
+    )
+    latest_run = _latest_completed_planning_run_for_branch(session, branch.id)
+    assignments: list[PlanningAssignment] = []
+    if latest_run is not None:
+        assignments = list(
+            session.scalars(
+                select(PlanningAssignment)
+                .options(
+                    joinedload(PlanningAssignment.ticket).joinedload(Ticket.subject),
+                    joinedload(PlanningAssignment.ticket).joinedload(Ticket.location),
+                )
+                .where(
+                    PlanningAssignment.planning_run_id == latest_run.id,
+                    PlanningAssignment.status.in_(list(_VISIBLE_SIM_ASSIGNMENT_STATUSES)),
+                )
+                .order_by(PlanningAssignment.technician_id, PlanningAssignment.sequence_order, PlanningAssignment.id)
+            ).unique().all()
+        )
+
+    by_technician: dict[int, list[PlanningAssignment]] = {}
+    for assignment in assignments:
+        by_technician.setdefault(assignment.technician_id, []).append(assignment)
+
+    rows: list[dict[str, Any]] = []
+    for technician in technicians:
+        technician_state = _get_or_create_technician_state(session, technician.id)
+        assignment, item_type, planned_start, planned_end, has_future_work = _current_assignment_for_technician(
+            session,
+            state=state,
+            technician=technician,
+            assignments=by_technician.get(technician.id, []),
+        )
+        delayed_anchor = _delayed_override_anchor(state, by_technician.get(technician.id, []), technician_state)
+        if delayed_anchor is not None:
+            travel_start, planned_start_at, planned_end_at = _simulation_datetimes_for_assignment(state, delayed_anchor)
+            assignment = delayed_anchor
+            if technician_state.simulated_time_applies_to == _SIMULATED_TIME_SCOPE_DRIVING:
+                item_type = "travel"
+                planned_start = travel_start.strftime("%H:%M")
+                planned_end = planned_start_at.strftime("%H:%M")
+            else:
+                item_type = "ticket"
+                planned_start = planned_start_at.strftime("%H:%M")
+                planned_end = planned_end_at.strftime("%H:%M")
+            has_future_work = True
+        assignment_id = assignment.id if assignment is not None else None
+        default_time_scope = _default_simulated_time_scope(item_type)
+        current_assignment_status = _assignment_status_for_item_type(item_type)
+        # if technician_state.planning_assignment_id != assignment_id:
+        #     technician_state.planning_assignment_id = assignment_id
+        # technician_state.simulated_time_applies_to = default_time_scope
+        planned_minutes_remaining = _minutes_until(state, planned_end)
+        simulated_end_time = _format_time(technician_state.simulated_end_at)
+        simulated_minutes_remaining = None
+        if technician_state.simulated_end_at is not None:
+            simulated_minutes_remaining = max(
+                0,
+                int(round((technician_state.simulated_end_at - state.current_simulation_time).total_seconds() / 60)),
+            )
+        rows.append(
+            {
+                "id": technician_state.id,
+                "technician": {
+                    "id": technician.id,
+                    "name": technician.name,
+                    "branch_id": technician.branch_id,
+                },
+                "status": _mechanic_status_label(item_type, has_future_work),
+                "status_code": _mechanic_status_code(item_type, has_future_work),
+                "planning_assignment_id": assignment_id,
+                "current_ticket": _assignment_ticket_dict(assignment, current_assignment_status),
+                "planned_start_time": planned_start,
+                "planned_end_time": planned_end,
+                "planned_minutes_remaining": planned_minutes_remaining,
+                "simulated_end_time": simulated_end_time,
+                "simulated_end_at": technician_state.simulated_end_at.isoformat() if technician_state.simulated_end_at else None,
+                "simulated_time_applies_to": technician_state.simulated_time_applies_to,
+                "simulated_minutes_remaining": simulated_minutes_remaining,
+                "effective_end_time": simulated_end_time or planned_end,
+                "effective_minutes_remaining": simulated_minutes_remaining if simulated_minutes_remaining is not None else planned_minutes_remaining,
+            }
+        )
+    session.flush()
+    return rows
+
+
+def update_technician_simulation_state(session: Session, technician_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    state = get_or_create_state(session)
+    technician = session.get(Technician, int(technician_id))
+    if technician is None:
+        raise ValueError(f"Technician {technician_id} was not found")
+    row = _get_or_create_technician_state(session, technician.id)
+
+    assignment_id = payload.get("planning_assignment_id")
+    if assignment_id is not None:
+        assignment = session.get(PlanningAssignment, int(assignment_id))
+        if assignment is None or assignment.technician_id != technician.id:
+            raise ValueError("planning_assignment_id does not belong to this technician")
+        row.planning_assignment_id = assignment.id
+
+    raw_scope = (
+        payload.get("simulated_time_applies_to")
+        if "simulated_time_applies_to" in payload
+        else payload.get("time_applies_to")
+        if "time_applies_to" in payload
+        else payload.get("applies_to")
+    )
+    if raw_scope is not None:
+        row.simulated_time_applies_to = _normalize_simulated_time_scope(raw_scope)
+
+    raw_end = payload.get("simulated_end_at") or payload.get("end_at") or payload.get("simulated_end_time") or payload.get("end_time")
+    if raw_end in {None, ""}:
+        row.simulated_end_at = None
+    else:
+        raw_text = str(raw_end).strip()
+        try:
+            if "T" in raw_text or " " in raw_text:
+                parsed = datetime.fromisoformat(raw_text.replace("Z", "+00:00"))
+                if parsed.tzinfo is not None:
+                    parsed = parsed.replace(tzinfo=None)
+            else:
+                parsed_time = time.fromisoformat(raw_text)
+                parsed = datetime.combine(state.current_simulation_time.date(), parsed_time)
+        except ValueError as exc:
+            raise ValueError("end_time must be HH:MM or an ISO datetime") from exc
+        row.simulated_end_at = parsed
+
+    update_planning_assignment_statuses_for_simulation(session, state, branch_id=technician.branch_id)
+    session.flush()
+    return next(
+        item for item in list_technician_simulation_states(session, branch_id=technician.branch_id)
+        if item["technician"]["id"] == technician.id
+    )

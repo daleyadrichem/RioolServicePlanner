@@ -112,6 +112,20 @@ class AddressValidationPayload(BaseModel):
     def as_service_payload(self) -> dict[str, Any]:
         return self.dict()
 
+
+class TechnicianSimulationPayload(BaseModel):
+    end_time: str | None = None
+    simulated_end_time: str | None = None
+    end_at: str | None = None
+    simulated_end_at: str | None = None
+    planning_assignment_id: int | None = None
+    simulated_time_applies_to: str | None = None
+    time_applies_to: str | None = None
+    applies_to: str | None = None
+
+    def as_service_payload(self) -> dict[str, Any]:
+        return self.dict(exclude_unset=True)
+
 app = FastAPI(
     title="Riool Service Planner API",
     description=(
@@ -382,6 +396,23 @@ def get_state(session: SessionDep) -> dict:
 @app.get("/simulator/statistics")
 def get_statistics(session: SessionDep) -> dict:
     return simulator_service.get_statistics(session)
+
+
+@app.get("/simulator/technicians")
+def list_simulated_technicians(session: SessionDep) -> list[dict]:
+    result = simulator_service.list_technician_simulation_states(session)
+    session.commit()
+    return result
+
+
+@app.patch("/simulator/technicians/{technician_id}")
+def update_simulated_technician(technician_id: int, payload: TechnicianSimulationPayload, session: SessionDep) -> dict:
+    try:
+        result = simulator_service.update_technician_simulation_state(session, technician_id, payload.as_service_payload())
+        session.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/simulator/start")

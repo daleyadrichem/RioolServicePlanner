@@ -28,6 +28,7 @@ DEFAULT_BRANCH_NAME = "Branch Den Bosch"
 TERMINAL_STATUSES = {TicketStatus.COMPLETED, TicketStatus.CANCELLED}
 ACTIVE_ASSIGNMENT_STATUSES = {
     PlanningAssignmentStatus.PLANNED,
+    PlanningAssignmentStatus.DRIVING,
     PlanningAssignmentStatus.IN_PROGRESS,
     PlanningAssignmentStatus.COMPLETED,
 }
@@ -113,6 +114,8 @@ def normalize_status(value: str | TicketStatus | None) -> TicketStatus:
         "IN_PROGRESS": TicketStatus.IN_PROGRESS,
         "ONDERWEG": TicketStatus.IN_PROGRESS,
         "BEZIG": TicketStatus.IN_PROGRESS,
+        "DELAYED": TicketStatus.DELAYED,
+        "VERTRAAGD": TicketStatus.DELAYED,
         "COMPLETED": TicketStatus.COMPLETED,
         "DONE": TicketStatus.COMPLETED,
         "FINISHED": TicketStatus.COMPLETED,
@@ -122,7 +125,7 @@ def normalize_status(value: str | TicketStatus | None) -> TicketStatus:
         "GEANNULEERD": TicketStatus.CANCELLED,
     }
     if normalized not in aliases:
-        raise ValueError("status must be one of open, planned, in_progress, completed, or cancelled")
+        raise ValueError("status must be one of open, planned, in_progress, delayed, completed, or cancelled")
     return aliases[normalized]
 
 

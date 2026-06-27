@@ -16,8 +16,8 @@
 <path d="M350,842 C195,842 195,97 40,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,776 C795,776 795,174 750,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,776 C795,776 795,174 750,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M350,1180 C395,1180 395,1595 440,1595" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
-<path d="M350,1180 C595,1180 595,317 840,317" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M350,1191 C395,1191 395,1595 440,1595" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
+<path d="M350,1191 C595,1191 595,317 840,317" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,1191 C595,1191 595,97 350,97" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,1191 C795,1191 795,174 750,174" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
 <path d="M840,1191 C595,1191 595,1867 350,1867" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" opacity="0.75"/>
@@ -116,7 +116,7 @@
 <text x="854" y="830" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">distance_km: FLOAT NOT NULL</text>
 <text x="854" y="852" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">calculated_at: DATETIME NOT NULL</text>
 <text x="854" y="874" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">expires_at: DATETIME</text>
-<rect x="40" y="1090" width="310" height="180" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+<rect x="40" y="1090" width="310" height="202" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
 <rect x="40" y="1090" width="310" height="34" rx="10" fill="#1e293b"/>
 <path d="M40,1114 H350 V1124 H40 Z" fill="#1e293b"/>
 <text x="54" y="1113" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">simulated_technician_states</text>
@@ -124,8 +124,9 @@
 <text x="54" y="1168" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] technician_id: INTEGER NOT NULL</text>
 <text x="54" y="1190" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">[FK] planning_assignment_id: INTEGER</text>
 <text x="54" y="1212" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">simulated_end_at: DATETIME</text>
-<text x="54" y="1234" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">created_at: DATETIME NOT NULL</text>
-<text x="54" y="1256" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">updated_at: DATETIME NOT NULL</text>
+<text x="54" y="1234" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">simulated_time_applies_to: VARCHAR(32)</text>
+<text x="54" y="1256" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">created_at: DATETIME NOT NULL</text>
+<text x="54" y="1278" font-family="Arial, sans-serif" font-size="12" font-weight="400" fill="#334155">updated_at: DATETIME NOT NULL</text>
 <rect x="440" y="1090" width="310" height="312" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
 <rect x="440" y="1090" width="310" height="34" rx="10" fill="#1e293b"/>
 <path d="M440,1114 H750 V1124 H440 Z" fill="#1e293b"/>

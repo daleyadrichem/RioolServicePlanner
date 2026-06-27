@@ -20,6 +20,7 @@ from riool_service.database.models.tickets import Ticket, TicketStatus
 
 VISIBLE_ASSIGNMENT_STATUSES = {
     PlanningAssignmentStatus.PLANNED,
+    PlanningAssignmentStatus.DRIVING,
     PlanningAssignmentStatus.IN_PROGRESS,
     PlanningAssignmentStatus.COMPLETED,
 }
@@ -130,7 +131,12 @@ def _technician_to_map_marker(
         (assignment for assignment in assignments if assignment.status == PlanningAssignmentStatus.IN_PROGRESS),
         None,
     )
-    location = in_progress.ticket.location if in_progress is not None else technician.start_location
+    driving = next(
+        (assignment for assignment in assignments if assignment.status == PlanningAssignmentStatus.DRIVING),
+        None,
+    )
+    active_assignment = in_progress or driving
+    location = active_assignment.ticket.location if in_progress is not None else technician.start_location
     point = _location_to_point(location)
     if point is None:
         return None
