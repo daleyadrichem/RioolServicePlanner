@@ -1,0 +1,207 @@
+id,input_address,formatted_address,street,house_number,city,latitude,longitude,created_at,updated_at
+1,"Jac. van Looystraat 5, 5216 SB 's-Hertogenbosch","Jac. van Looystraat 5, 5216 SB 's-Hertogenbosch",Jac. van Looystraat,5,'s-Hertogenbosch,51.6834733,5.3323285,2026-06-27 13:13:56,2026-06-27 13:13:56
+2,"Hoogveldsestraat 9, Oss","Hoogveldsestraat 9, Oss",Hoogveldsestraat,9,Oss,51.7713895,5.6969239,2026-06-27 13:13:58,2026-06-27 13:13:58
+3,"Krommeniestraat 13, Tilburg","Krommeniestraat 13, Tilburg",Krommeniestraat,13,Tilburg,51.5763281,5.0038347,2026-06-27 13:14:00,2026-06-27 13:14:00
+4,"Courtine 2, Zaltbommel","Courtine 2, Zaltbommel",Courtine,2,Zaltbommel,51.8038822,5.2314758,2026-06-27 13:14:02,2026-06-27 13:14:02
+5,"Boschweg 236, Schijndel","Boschweg 236, Schijndel",Boschweg,236,Schijndel,51.6333749,5.406441,2026-06-27 13:14:04,2026-06-27 13:14:04
+6,"Van Voordenpark 15, Zaltbommel","Van Voordenpark 15, Zaltbommel",Van Voordenpark,15,Zaltbommel,51.797331,5.2628049,2026-06-27 13:14:06,2026-06-27 13:14:06
+7,Simulated address near Branch Den Bosch,"Dobbestraat 11, Nistelrode",Dobbestraat,11,Nistelrode,51.70696185541793,5.557428169116563,2026-06-27 13:14:08,2026-06-27 13:14:08
+8,Simulated address near Branch Den Bosch,"Loofaert 47, Berlicum",Loofaert,47,Berlicum,51.69734012824477,5.399603598965762,2026-06-27 13:14:18,2026-06-27 13:14:18
+9,Simulated address near Branch Den Bosch,"Scheibaan 2, Oisterwijk",Scheibaan,2,Oisterwijk,51.57615821402191,5.223908358596434,2026-06-27 13:14:22,2026-06-27 13:14:22
+10,Simulated address near Branch Den Bosch,"Doctor Hoebenstraat 1, Oss",Doctor Hoebenstraat,1,Oss,51.77135030413272,5.54310348668045,2026-06-27 13:14:28,2026-06-27 13:14:28
+11,Simulated address near Branch Den Bosch,"Hoofdstraat 71C, 's Gravenmoer",Hoofdstraat,71C,'s Gravenmoer,51.65205125390748,4.944819590203045,2026-06-27 13:14:36,2026-06-27 13:14:36
+12,Simulated address near Branch Den Bosch,"Groenstraat 6, Esbeek",Groenstraat,6,Esbeek,51.461877707499994,5.144560869211226,2026-06-27 13:14:44,2026-06-27 13:14:44
+13,Simulated address near Branch Den Bosch,"Vorstenbosseweg 10a, Heeswijk-Dinther",Vorstenbosseweg,10a,Heeswijk-Dinther,51.651750624562126,5.533594337718496,2026-06-27 13:14:48,2026-06-27 13:14:48
+14,Simulated address near Branch Den Bosch,"Kaathoven 27A, Vinkel",Kaathoven,27A,Vinkel,51.69163435800694,5.454552124831125,2026-06-27 13:14:50,2026-06-27 13:14:50
+15,Simulated address near Branch Den Bosch,"Zandstraat 11, Zaltbommel",Zandstraat,11,Zaltbommel,51.81194785803988,5.244934639368177,2026-06-27 13:14:58,2026-06-27 13:14:58
+16,Simulated address near Branch Den Bosch,"Tilburgseweg 41, Hilvarenbeek",Tilburgseweg,41,Hilvarenbeek,51.51516581494878,5.1113364265649,2026-06-27 13:15:00,2026-06-27 13:15:00
+17,Simulated address near Branch Den Bosch,"Vliegveldweg 4, Schijndel",Vliegveldweg,4,Schijndel,51.604165996304225,5.452968382635273,2026-06-27 13:15:04,2026-06-27 13:15:04
+18,Simulated address near Branch Den Bosch,"Schansweg 3A-39, Uden",Schansweg,3A-39,Uden,51.66636680944717,5.57512432074865,2026-06-27 13:15:14,2026-06-27 13:15:14
+19,Simulated address near Branch Den Bosch,"Strijbosscheweg 28, Handel",Strijbosscheweg,28,Handel,51.58304273480686,5.705690359962822,2026-06-27 13:15:18,2026-06-27 13:15:18
+20,Simulated address near Branch Den Bosch,"Hurksestraat 22, Eindhoven",Hurksestraat,22,Eindhoven,51.433989139554086,5.438142074046116,2026-06-27 13:15:23,2026-06-27 13:15:23
+21,Simulated address near Branch Den Bosch,"Patersweg 11A, Uden",Patersweg,11A,Uden,51.66685921579038,5.657201467025175,2026-06-27 13:15:26,2026-06-27 13:15:26
+22,Simulated address near Branch Den Bosch,"Leeuwkesgraaf 15, Maren-Kessel",Leeuwkesgraaf,15,Maren-Kessel,51.76127524117917,5.370671135653371,2026-06-27 13:15:34,2026-06-27 13:15:34
+23,Simulated address near Branch Den Bosch,"Spijkse Kweldijk 79S, Spijk",Spijkse Kweldijk,79S,Spijk,51.853482682670645,5.002023049864669,2026-06-27 13:15:45,2026-06-27 13:15:45
+24,Simulated address near Branch Den Bosch,"Doornboomstraat 7, Middelbeers",Doornboomstraat,7,Middelbeers,51.466667925937244,5.250011652916351,2026-06-27 13:15:48,2026-06-27 13:15:48
+25,Simulated address near Branch Den Bosch,"Hoolstraat 12, Berkel-Enschot",Hoolstraat,12,Berkel-Enschot,51.595161763058115,5.1586097453709305,2026-06-27 13:15:50,2026-06-27 13:15:50
+26,Simulated address near Branch Den Bosch,"Schaijkseweg 8C-VAK, Herpen",Schaijkseweg,8C-VAK,Herpen,51.76588146926473,5.610292276614402,2026-06-27 13:15:58,2026-06-27 13:15:58
+27,Simulated address near Branch Den Bosch,"Lingedijk 7, Kedichem",Lingedijk,7,Kedichem,51.860130959709586,5.029034497981046,2026-06-27 13:16:00,2026-06-27 13:16:00
+28,Simulated address near Branch Den Bosch,"Kromvensedijk 7, Middelbeers",Kromvensedijk,7,Middelbeers,51.45502011685686,5.239734042056759,2026-06-27 13:16:06,2026-06-27 13:16:06
+29,Simulated address near Branch Den Bosch,"Jan Spieringweg 1a, Oudendijk",Jan Spieringweg,1a,Oudendijk,51.807087135229494,4.975973555710601,2026-06-27 13:16:14,2026-06-27 13:16:14
+30,Simulated address near Branch Den Bosch,"Rooiakker 1, Gemonde",Rooiakker,1,Gemonde,51.604818189261564,5.343504911459583,2026-06-27 13:16:20,2026-06-27 13:16:20
+31,Simulated address near Branch Den Bosch,"Heidijk 51, Vlijmen",Heidijk,51,Vlijmen,51.68814268576011,5.2180896563842625,2026-06-27 13:16:22,2026-06-27 13:16:22
+32,Simulated address near Branch Den Bosch,"Mekkersteeg 9, Druten",Mekkersteeg,9,Druten,51.846506638860724,5.608273256703307,2026-06-27 13:16:24,2026-06-27 13:16:24
+33,Simulated address near Branch Den Bosch,"Koningin Julianaweg 6, Haghorst",Koningin Julianaweg,6,Haghorst,51.506470285016825,5.240335859969531,2026-06-27 13:16:26,2026-06-27 13:16:26
+34,Simulated address near Branch Den Bosch,"Populier 8, Kaatsheuvel",Populier,8,Kaatsheuvel,51.65812954551992,5.015480546585143,2026-06-27 13:16:32,2026-06-27 13:16:32
+35,Simulated address near Branch Den Bosch,"Hoog-Beugt 10, Heeswijk-Dinther",Hoog-Beugt,10,Heeswijk-Dinther,51.637579957999364,5.512820327461997,2026-06-27 13:16:35,2026-06-27 13:16:35
+36,Simulated address near Branch Den Bosch,"Vijfhuizenbaan 32, Riel",Vijfhuizenbaan,32,Riel,51.52458842218833,4.982558906630447,2026-06-27 13:16:37,2026-06-27 13:16:37
+37,Simulated address near Branch Den Bosch,"Leeuwerikstraat 26, Oirschot",Leeuwerikstraat,26,Oirschot,51.50598088678189,5.300709902488616,2026-06-27 13:16:38,2026-06-27 13:16:38
+38,Simulated address near Branch Den Bosch,"Bleekeseweg 9, Vinkel",Bleekeseweg,9,Vinkel,51.69823613182007,5.481838864808371,2026-06-27 13:16:40,2026-06-27 13:16:40
+39,Simulated address near Branch Den Bosch,"Zandstraat 4, Moergestel",Zandstraat,4,Moergestel,51.55005971269784,5.199422934660512,2026-06-27 13:16:43,2026-06-27 13:16:43
+40,Simulated address near Branch Den Bosch,"'t Broek 3, Nistelrode",'t Broek,3,Nistelrode,51.707372232904326,5.537536451415094,2026-06-27 13:16:44,2026-06-27 13:16:44
+41,Simulated address near Branch Den Bosch,"Wijenburgsestraat 9, Echteld",Wijenburgsestraat,9,Echteld,51.909106145906414,5.506947730344251,2026-06-27 13:16:51,2026-06-27 13:16:51
+42,Simulated address near Branch Den Bosch,"Groenstraat 101a, Udenhout",Groenstraat,101a,Udenhout,51.6191787171716,5.147218938874779,2026-06-27 13:16:53,2026-06-27 13:16:53
+43,Simulated address near Branch Den Bosch,"Eindsestraat 8, Drongelen",Eindsestraat,8,Drongelen,51.723140628722795,5.03994974224398,2026-06-27 13:16:59,2026-06-27 13:16:59
+44,Simulated address near Branch Den Bosch,"Hoofdstraat 41, Best",Hoofdstraat,41,Best,51.51162294280828,5.39036768152751,2026-06-27 13:17:05,2026-06-27 13:17:05
+45,Simulated address near Branch Den Bosch,"Tarwestraat 14, Langenboom",Tarwestraat,14,Langenboom,51.68489500032658,5.736264285915687,2026-06-27 13:17:13,2026-06-27 13:17:13
+46,Simulated address near Branch Den Bosch,"Meulekensweg 3b, Liempde",Meulekensweg,3b,Liempde,51.57187174551477,5.3923966492660105,2026-06-27 13:17:15,2026-06-27 13:17:15
+47,Simulated address near Branch Den Bosch,"Morkolf 4, Uden",Morkolf,4,Uden,51.65188352505215,5.6102430976191355,2026-06-27 13:17:17,2026-06-27 13:17:17
+48,Simulated address near Branch Den Bosch,"Hoekeinde 31, Sleeuwijk",Hoekeinde,31,Sleeuwijk,51.821664804737615,4.958202623102312,2026-06-27 13:17:25,2026-06-27 13:17:25
+49,Simulated address near Branch Den Bosch,"Lagestraat 56, Niftrik",Lagestraat,56,Niftrik,51.80771639759637,5.6800099987489725,2026-06-27 13:17:29,2026-06-27 13:17:29
+50,Simulated address near Branch Den Bosch,"Van Heemstraweg 130, Dreumel",Van Heemstraweg,130,Dreumel,51.84282264898952,5.431923527900116,2026-06-27 13:17:33,2026-06-27 13:17:33
+51,Simulated address near Branch Den Bosch,"De Kraan 2, Est",De Kraan,2,Est,51.84885246437115,5.30754546933676,2026-06-27 13:17:35,2026-06-27 13:17:35
+52,Simulated address near Branch Den Bosch,"Donkerstraat 30a, Ravenswaaij",Donkerstraat,30a,Ravenswaaij,51.94733941430503,5.320013320302001,2026-06-27 13:17:41,2026-06-27 13:17:41
+53,Simulated address near Branch Den Bosch,"Baan 30, Kaatsheuvel",Baan,30,Kaatsheuvel,51.64338182266461,5.014573647783449,2026-06-27 13:17:43,2026-06-27 13:17:43
+54,Simulated address near Branch Den Bosch,"Zandstraat 1b, Heeswijk-Dinther",Zandstraat,1b,Heeswijk-Dinther,51.65265256037763,5.4961042908889,2026-06-27 13:17:45,2026-06-27 13:17:45
+55,Simulated address near Branch Den Bosch,"Hoogeindsestraat 8, Esbeek",Hoogeindsestraat,8,Esbeek,51.449945145532,5.128981564587565,2026-06-27 13:17:47,2026-06-27 13:17:47
+56,Simulated address near Branch Den Bosch,"Esscheweg 274A, Vught",Esscheweg,274A,Vught,51.62776936269561,5.279894965847964,2026-06-27 13:17:51,2026-06-27 13:17:51
+57,Simulated address near Branch Den Bosch,"Dongenseweg 67, Tilburg",Dongenseweg,67,Tilburg,51.58885859684091,5.033664383471708,2026-06-27 13:17:59,2026-06-27 13:17:59
+58,Simulated address near Branch Den Bosch,"Hendriksweg 8, Langenboom",Hendriksweg,8,Langenboom,51.68881088320193,5.742850665235406,2026-06-27 13:18:03,2026-06-27 13:18:03
+59,Simulated address near Branch Den Bosch,"Aalskamperweg 2, Enspijk",Aalskamperweg,2,Enspijk,51.86229187587165,5.206342708603438,2026-06-27 13:18:09,2026-06-27 13:18:09
+60,Simulated address near Branch Den Bosch,"Gewandhuis 6, Boekel",Gewandhuis,6,Boekel,51.614660969806174,5.67099829835452,2026-06-27 13:18:15,2026-06-27 13:18:15
+61,Simulated address near Branch Den Bosch,"Lekbandijk 83, Ravenswaaij",Lekbandijk,83,Ravenswaaij,51.95297963900382,5.321601029126651,2026-06-27 13:18:21,2026-06-27 13:18:21
+62,Simulated address near Branch Den Bosch,"Brugstraat 86, Vinkel",Brugstraat,86,Vinkel,51.700172778888444,5.447009934008927,2026-06-27 13:18:23,2026-06-27 13:18:23
+63,Simulated address near Branch Den Bosch,"Lingedijk 85, Kedichem",Lingedijk,85,Kedichem,51.866926228128804,5.050246532175288,2026-06-27 13:18:27,2026-06-27 13:18:27
+64,Simulated address near Branch Den Bosch,"Spaanderstraat 229, Berghem",Spaanderstraat,229,Berghem,51.773095143371776,5.554083482748702,2026-06-27 13:18:29,2026-06-27 13:18:29
+65,Simulated address near Branch Den Bosch,"Burensedijk 11, Buurmalsen",Burensedijk,11,Buurmalsen,51.89379896919825,5.3049299860265045,2026-06-27 13:18:33,2026-06-27 13:18:33
+66,Simulated address near Branch Den Bosch,"Zijp 15, Venhorst",Zijp,15,Venhorst,51.6084219696153,5.706280500075093,2026-06-27 13:18:37,2026-06-27 13:18:37
+67,Simulated address near Branch Den Bosch,"Havendijk 22, Beesd",Havendijk,22,Beesd,51.88716404866993,5.199043031013366,2026-06-27 13:18:39,2026-06-27 13:18:39
+68,Simulated address near Branch Den Bosch,"Merodelaan 30, Oisterwijk",Merodelaan,30,Oisterwijk,51.57204654896334,5.19367472188851,2026-06-27 13:18:45,2026-06-27 13:18:45
+69,Simulated address near Branch Den Bosch,"Kempenlandstraat 1, Reek",Kempenlandstraat,1,Reek,51.748638408056166,5.6859078335112905,2026-06-27 13:18:47,2026-06-27 13:18:47
+70,Simulated address near Branch Den Bosch,"De Bunders 7A, Volkel",De Bunders,7A,Volkel,51.66411330008758,5.677396256278894,2026-06-27 13:18:49,2026-06-27 13:18:49
+71,Simulated address near Branch Den Bosch,"Meikampgraaf 4, Hellouw",Meikampgraaf,4,Hellouw,51.83953945394212,5.161313223572205,2026-06-27 13:18:51,2026-06-27 13:18:51
+72,Simulated address near Branch Den Bosch,"Waalbandijk 13, Boven-Leeuwen",Waalbandijk,13,Boven-Leeuwen,51.89086204642536,5.552672437089361,2026-06-27 13:18:53,2026-06-27 13:18:53
+73,Simulated address near Branch Den Bosch,"Abdijhof 20, Uden",Abdijhof,20,Uden,51.653844739738354,5.611385091386147,2026-06-27 13:18:55,2026-06-27 13:18:55
+74,Simulated address near Branch Den Bosch,"Volderstraatje 1, 's-Hertogenbosch",Volderstraatje,1,'s-Hertogenbosch,51.685596038846064,5.3066436712195175,2026-06-27 13:18:57,2026-06-27 13:18:57
+75,Simulated address near Branch Den Bosch,"Huijgevoort 24, Oost West en Middelbeers",Huijgevoort,24,Oost West en Middelbeers,51.463271142437115,5.213379821097406,2026-06-27 13:19:01,2026-06-27 13:19:01
+76,Simulated address near Branch Den Bosch,"Ophemertsestraat 16, Tiel",Ophemertsestraat,16,Tiel,51.859587374301476,5.349675461561054,2026-06-27 13:19:03,2026-06-27 13:19:03
+77,Simulated address near Branch Den Bosch,"Broekeindsedijk 2, Oost West en Middelbeers",Broekeindsedijk,2,Oost West en Middelbeers,51.437358397721425,5.216062449797431,2026-06-27 13:19:07,2026-06-27 13:19:07
+78,Simulated address near Branch Den Bosch,"Hogeweg 5c, Nieuwaal",Hogeweg,5c,Nieuwaal,51.80400565977182,5.188688531098237,2026-06-27 13:19:14,2026-06-27 13:19:14
+79,Simulated address near Branch Den Bosch,"Intendanceplantsoen 1-18, Velp",Intendanceplantsoen,1-18,Velp,51.74628941619979,5.732548017309591,2026-06-27 13:19:17,2026-06-27 13:19:17
+80,Simulated address near Branch Den Bosch,"Kerkweg 7, Heukelum",Kerkweg,7,Heukelum,51.86108306308973,5.075584844635705,2026-06-27 13:19:21,2026-06-27 13:19:21
+81,Simulated address near Branch Den Bosch,"Loofaert 40, Berlicum",Loofaert,40,Berlicum,51.69797328413965,5.395060823689365,2026-06-27 13:19:50,2026-06-27 13:19:50
+82,Simulated address near Branch Den Bosch,"Noordstraat 49, Landhorst",Noordstraat,49,Landhorst,51.63444541121324,5.752618274092865,2026-06-27 13:19:53,2026-06-27 13:19:53
+83,Simulated address near Branch Den Bosch,"Abersland 2718, Wijchen",Abersland,2718,Wijchen,51.79815843451621,5.719519704707596,2026-06-27 13:20:02,2026-06-27 13:20:02
+84,Simulated address near Branch Den Bosch,"Princepeelweg 43, Wilbertoord",Princepeelweg,43,Wilbertoord,51.657025399007566,5.756991009486558,2026-06-27 13:20:03,2026-06-27 13:20:03
+85,Simulated address near Branch Den Bosch,"Leurke 6, Boekel",Leurke,6,Boekel,51.593280300930985,5.673739408279224,2026-06-27 13:20:08,2026-06-27 13:20:08
+86,Simulated address near Branch Den Bosch,"Esdoornstraat 109, 's-Hertogenbosch",Esdoornstraat,109,'s-Hertogenbosch,51.69337725599284,5.324259940117196,2026-06-27 13:20:16,2026-06-27 13:20:16
+87,Simulated address near Branch Den Bosch,"Baan 40A, Kaatsheuvel",Baan,40A,Kaatsheuvel,51.6452636653199,5.019152640410407,2026-06-27 13:20:17,2026-06-27 13:20:17
+88,Simulated address near Branch Den Bosch,"Wemeldingestraat 30, Tilburg",Wemeldingestraat,30,Tilburg,51.57186343350449,5.003964532984226,2026-06-27 13:20:19,2026-06-27 13:20:19
+89,Simulated address near Branch Den Bosch,"Kooiweg 1, Dreumel",Kooiweg,1,Dreumel,51.830759232010784,5.4444715728845745,2026-06-27 13:20:21,2026-06-27 13:20:21
+90,Simulated address near Branch Den Bosch,"Bovenstehuis 2b, Boekel",Bovenstehuis,2b,Boekel,51.611779860512854,5.682650415829451,2026-06-27 13:20:27,2026-06-27 13:20:27
+91,Simulated address near Branch Den Bosch,"Gouverneur Crommelinlaan 7, Sint-Oedenrode",Gouverneur Crommelinlaan,7,Sint-Oedenrode,51.557532732460984,5.463691460996275,2026-06-27 13:20:30,2026-06-27 13:20:30
+92,Simulated address near Branch Den Bosch,"Duifhuizerweg 15, Uden",Duifhuizerweg,15,Uden,51.63475185978252,5.596803508531099,2026-06-27 13:20:32,2026-06-27 13:20:32
+93,Simulated address near Branch Den Bosch,"Turnhoutsebaan 13, Goirle",Turnhoutsebaan,13,Goirle,51.491413695472765,5.0590552684640375,2026-06-27 13:20:37,2026-06-27 13:20:37
+94,Simulated address near Branch Den Bosch,"Poeldonkweg 47D, 's-Hertogenbosch",Poeldonkweg,47D,'s-Hertogenbosch,51.682223497643214,5.340860917334295,2026-06-27 13:20:41,2026-06-27 13:20:41
+95,Simulated address near Branch Den Bosch,"Mispelhoefstraat 37, Eindhoven",Mispelhoefstraat,37,Eindhoven,51.470406548029445,5.408802337453284,2026-06-27 13:20:45,2026-06-27 13:20:45
+96,Simulated address near Branch Den Bosch,"Baandervrouwenlaan 263, Boxtel",Baandervrouwenlaan,263,Boxtel,51.60527878965923,5.320066521557213,2026-06-27 13:20:54,2026-06-27 13:20:54
+97,Simulated address near Branch Den Bosch,"Benedenkerkstraat 37, Waspik",Benedenkerkstraat,37,Waspik,51.68456082956303,4.938659427428364,2026-06-27 13:20:58,2026-06-27 13:20:58
+98,Simulated address near Branch Den Bosch,"Zandstraat 15, Berkel-Enschot",Zandstraat,15,Berkel-Enschot,51.564213776879505,5.128934714582875,2026-06-27 13:21:08,2026-06-27 13:21:08
+99,Simulated address near Branch Den Bosch,"Erichemseweg 10A, Erichem",Erichemseweg,10A,Erichem,51.90186820624076,5.344665038415328,2026-06-27 13:21:14,2026-06-27 13:21:14
+100,Simulated address near Branch Den Bosch,"Middelweg 8, Rossum",Middelweg,8,Rossum,51.79268981741983,5.284572686651157,2026-06-27 13:21:20,2026-06-27 13:21:20
+101,Simulated address near Branch Den Bosch,"Molenstraat 91, Nederhemert",Molenstraat,91,Nederhemert,51.76136061952885,5.154957894403916,2026-06-27 13:21:24,2026-06-27 13:21:24
+102,Simulated address near Branch Den Bosch,"Oude Weidesteeg 6a, Eethen",Oude Weidesteeg,6a,Eethen,51.74101117227245,5.0531848200107685,2026-06-27 13:21:26,2026-06-27 13:21:26
+103,Simulated address near Branch Den Bosch,"Rouwven 2, Wintelre",Rouwven,2,Wintelre,51.45476144060171,5.321306059901518,2026-06-27 13:21:34,2026-06-27 13:21:34
+104,Simulated address near Branch Den Bosch,"Schepersweg 5G, Oost West en Middelbeers",Schepersweg,5G,Oost West en Middelbeers,51.448573749648666,5.215438753823602,2026-06-27 13:21:36,2026-06-27 13:21:36
+105,Simulated address near Branch Den Bosch,"Groenendijk 64, Oosteind",Groenendijk,64,Oosteind,51.672568713747395,4.92057246251767,2026-06-27 13:21:44,2026-06-27 13:21:44
+106,Simulated address near Branch Den Bosch,"Stoffels 106, Uden",Stoffels,106,Uden,51.67236406711627,5.63156100431511,2026-06-27 13:21:46,2026-06-27 13:21:46
+107,Simulated address near Branch Den Bosch,"Zeelandsedijk 13, Volkel",Zeelandsedijk,13,Volkel,51.650102568266384,5.672471537190438,2026-06-27 13:21:52,2026-06-27 13:21:52
+108,Simulated address near Branch Den Bosch,"Kersouwelaan 1, Heeswijk-Dinther",Kersouwelaan,1,Heeswijk-Dinther,51.666696406626286,5.450373666410257,2026-06-27 13:21:54,2026-06-27 13:21:54
+109,Simulated address near Branch Den Bosch,"Burgemeester Schrevensingel 5, Veghel",Burgemeester Schrevensingel,5,Veghel,51.62364733152437,5.537474284779573,2026-06-27 13:21:56,2026-06-27 13:21:56
+110,Simulated address near Branch Den Bosch,"Oude Bosschebaan 7, Udenhout",Oude Bosschebaan,7,Udenhout,51.63855589360465,5.136103367212954,2026-06-27 13:22:00,2026-06-27 13:22:00
+111,Simulated address near Branch Den Bosch,"Prins Willemsweg 7, Echteld",Prins Willemsweg,7,Echteld,51.89192969856319,5.476618229417303,2026-06-27 13:22:02,2026-06-27 13:22:02
+112,Simulated address near Branch Den Bosch,"Palmstraat 9, Schaijk",Palmstraat,9,Schaijk,51.72976906125494,5.602937431365714,2026-06-27 13:22:06,2026-06-27 13:22:06
+113,Simulated address near Branch Den Bosch,"Korfgraaf 8, Hellouw",Korfgraaf,8,Hellouw,51.82790420932679,5.173042677159087,2026-06-27 13:22:08,2026-06-27 13:22:08
+114,Simulated address near Branch Den Bosch,"Ophemertsestraat 13, Wadenoijen",Ophemertsestraat,13,Wadenoijen,51.84975579056329,5.342305352891522,2026-06-27 13:22:14,2026-06-27 13:22:14
+115,Simulated address near Branch Den Bosch,"Canadesestraat 15, Waalwijk",Canadesestraat,15,Waalwijk,51.686684261676916,5.074285853679946,2026-06-27 13:22:16,2026-06-27 13:22:16
+116,Simulated address near Branch Den Bosch,"Sprangseweg 13c, Waalwijk",Sprangseweg,13c,Waalwijk,51.68041057954466,5.050699314162775,2026-06-27 13:22:21,2026-06-27 13:22:21
+117,Simulated address near Branch Den Bosch,"Molenweg 18, Berghem",Molenweg,18,Berghem,51.77051770180703,5.570990719647225,2026-06-27 13:22:30,2026-06-27 13:22:30
+118,Simulated address near Branch Den Bosch,"Heirbaan 12, Moergestel",Heirbaan,12,Moergestel,51.52774316117911,5.225174560672285,2026-06-27 13:22:36,2026-06-27 13:22:36
+119,Simulated address near Branch Den Bosch,"Lekkerbeetjenlaan 19, Vught",Lekkerbeetjenlaan,19,Vught,51.65574377182566,5.276384293582298,2026-06-27 13:22:38,2026-06-27 13:22:38
+120,Simulated address near Branch Den Bosch,"De Amert 706B, Veghel",De Amert,706B,Veghel,51.625710082062525,5.50941480309789,2026-06-27 13:22:44,2026-06-27 13:22:44
+121,Simulated address near Branch Den Bosch,"Den Hul 1, Lith",Den Hul,1,Lith,51.80138167692151,5.440189058079299,2026-06-27 13:22:51,2026-06-27 13:22:51
+122,Simulated address near Branch Den Bosch,"Sint-Michielsgestelseweg 22B, Vught",Sint-Michielsgestelseweg,22B,Vught,51.64705648044498,5.317488220150647,2026-06-27 13:22:53,2026-06-27 13:22:53
+123,Simulated address near Branch Den Bosch,"Grotel 11, Bakel",Grotel,11,Bakel,51.524428560032064,5.683190989143635,2026-06-27 13:22:54,2026-06-27 13:22:54
+124,Simulated address near Branch Den Bosch,"Schoolstraat 4, Sprang-Capelle",Schoolstraat,4,Sprang-Capelle,51.68874232031526,4.981106686546619,2026-06-27 13:22:58,2026-06-27 13:22:58
+125,Simulated address near Branch Den Bosch,"Bernadettestraat 41, Rosmalen",Bernadettestraat,41,Rosmalen,51.70563239641396,5.383151785355574,2026-06-27 13:23:03,2026-06-27 13:23:03
+126,Simulated address near Branch Den Bosch,"Udenhoutseweg 7, Helvoirt",Udenhoutseweg,7,Helvoirt,51.6369332949841,5.197245160254264,2026-06-27 13:23:04,2026-06-27 13:23:04
+127,Simulated address near Branch Den Bosch,"Duifhuisstraat 3, Schaijk",Duifhuisstraat,3,Schaijk,51.72354538136103,5.652805440183684,2026-06-27 13:23:06,2026-06-27 13:23:06
+128,Simulated address near Branch Den Bosch,"Bossebaan 12, Haaren",Bossebaan,12,Haaren,51.59706271675845,5.22131332703989,2026-06-27 13:23:10,2026-06-27 13:23:10
+129,Simulated address near Branch Den Bosch,"Zandstraat 5a, Kerkdriel",Zandstraat,5a,Kerkdriel,51.77102370077552,5.355356410141239,2026-06-27 13:23:16,2026-06-27 13:23:16
+130,Simulated address near Branch Den Bosch,"Papenvoortse Heide 8A, Nuenen",Papenvoortse Heide,8A,Nuenen,51.472846919981635,5.588695065729153,2026-06-27 13:23:20,2026-06-27 13:23:20
+131,Simulated address near Branch Den Bosch,"Waalbandijk 107a, Beneden-Leeuwen",Waalbandijk,107a,Beneden-Leeuwen,51.885969445756416,5.502187928614231,2026-06-27 13:23:23,2026-06-27 13:23:23
+132,Simulated address near Branch Den Bosch,"Costerman Boodtstraat 24, Goirle",Costerman Boodtstraat,24,Goirle,51.52689839614786,5.073936017820228,2026-06-27 13:23:24,2026-06-27 13:23:24
+133,Simulated address near Branch Den Bosch,"Wolput 94, Vlijmen",Wolput,94,Vlijmen,51.695517776735116,5.194766174987396,2026-06-27 13:23:26,2026-06-27 13:23:26
+134,Simulated address near Branch Den Bosch,"Luttel Inghweg 4, Kerkdriel",Luttel Inghweg,4,Kerkdriel,51.77685929578775,5.316954475541784,2026-06-27 13:23:30,2026-06-27 13:23:30
+135,Simulated address near Branch Den Bosch,"Spierkesweg 20, Sint-Oedenrode",Spierkesweg,20,Sint-Oedenrode,51.56195153774252,5.538691709059015,2026-06-27 13:23:34,2026-06-27 13:23:34
+136,Simulated address near Branch Den Bosch,"Trentweg 5, Keldonk",Trentweg,5,Keldonk,51.57910681994223,5.591783192003401,2026-06-27 13:23:36,2026-06-27 13:23:36
+137,Simulated address near Branch Den Bosch,"Provincialeweg 110, Velddriel",Provincialeweg,110,Velddriel,51.76846953738098,5.297785156249451,2026-06-27 13:23:40,2026-06-27 13:23:40
+138,Simulated address near Branch Den Bosch,"Giessensesteeg 2a, Giessen",Giessensesteeg,2a,Giessen,51.78516317072726,5.026285342180342,2026-06-27 13:23:42,2026-06-27 13:23:42
+139,Simulated address near Branch Den Bosch,"Garnichweg 33, Eindhoven",Garnichweg,33,Eindhoven,51.47486899858799,5.47598279688943,2026-06-27 13:23:44,2026-06-27 13:23:44
+140,Simulated address near Branch Den Bosch,"Heesbeenseweg 3, Heesbeen",Heesbeenseweg,3,Heesbeen,51.733420779418815,5.120901185461051,2026-06-27 13:23:49,2026-06-27 13:23:49
+141,Simulated address near Branch Den Bosch,"Vaartstraat 31, Kaatsheuvel",Vaartstraat,31,Kaatsheuvel,51.66195093970218,5.0473098663474785,2026-06-27 13:23:53,2026-06-27 13:23:53
+142,Simulated address near Branch Den Bosch,"Langenboomseweg 147, Langenboom",Langenboomseweg,147,Langenboom,51.69253058992317,5.740695418984856,2026-06-27 13:23:59,2026-06-27 13:23:59
+143,Simulated address near Branch Den Bosch,"Regge 81, Tilburg",Regge,81,Tilburg,51.54671306392525,5.046199816755654,2026-06-27 13:24:19,2026-06-27 13:24:19
+144,Simulated address near Branch Den Bosch,"Wilhelminastraat 5, Boekel",Wilhelminastraat,5,Boekel,51.60537430100715,5.6713412875455305,2026-06-27 13:24:25,2026-06-27 13:24:25
+145,Simulated address near Branch Den Bosch,"Grolderseweg 23, Heesch",Grolderseweg,23,Heesch,51.70766874320219,5.515507310077304,2026-06-27 13:24:41,2026-06-27 13:24:41
+146,Simulated address near Branch Den Bosch,"Waterlaat 14, Kaatsheuvel",Waterlaat,14,Kaatsheuvel,51.65324241410869,5.033581870771999,2026-06-27 13:24:43,2026-06-27 13:24:43
+147,Simulated address near Branch Den Bosch,"Langstraat 27, Nistelrode",Langstraat,27,Nistelrode,51.700081536083054,5.522205399918659,2026-06-27 13:24:49,2026-06-27 13:24:49
+148,Simulated address near Branch Den Bosch,"Frontstraat 3A, Uden",Frontstraat,3A,Uden,51.65305153237509,5.646444063046742,2026-06-27 13:24:53,2026-06-27 13:24:53
+149,Simulated address near Branch Den Bosch,"Veldleeuwerik 13, Maren-Kessel",Veldleeuwerik,13,Maren-Kessel,51.793318861937834,5.391745563020553,2026-06-27 13:25:05,2026-06-27 13:25:05
+150,Simulated address near Branch Den Bosch,"Reuzenberg 46, Veldhoven",Reuzenberg,46,Veldhoven,51.42429157321678,5.390871099348287,2026-06-27 13:25:07,2026-06-27 13:25:07
+151,Simulated address near Branch Den Bosch,"Gerwenseweg 14C, Nuenen",Gerwenseweg,14C,Nuenen,51.48470513483705,5.561814663592155,2026-06-27 13:25:09,2026-06-27 13:25:09
+152,Simulated address near Branch Den Bosch,"De Dijk 12, Helvoirt",De Dijk,12,Helvoirt,51.63298721453474,5.24636830231665,2026-06-27 13:25:11,2026-06-27 13:25:11
+153,Simulated address near Branch Den Bosch,"Oude Weisestraat 2, Druten",Oude Weisestraat,2,Druten,51.88096097812723,5.627501880699959,2026-06-27 13:25:17,2026-06-27 13:25:17
+154,Simulated address near Branch Den Bosch,"Vleugeldijk 17, Zuilichem",Vleugeldijk,17,Zuilichem,51.79783384817668,5.108863780846433,2026-06-27 13:25:25,2026-06-27 13:25:25
+155,Simulated address near Branch Den Bosch,"Paradijs 14a, Elsendorp",Paradijs,14a,Elsendorp,51.59123490158764,5.738532009249838,2026-06-27 13:25:27,2026-06-27 13:25:27
+156,Simulated address near Branch Den Bosch,"Beekse Bergen 1, Hilvarenbeek",Beekse Bergen,1,Hilvarenbeek,51.519136816658346,5.115142101728937,2026-06-27 13:25:29,2026-06-27 13:25:29
+157,Simulated address near Branch Den Bosch,"Nieuwe Dijk 25, 's-Hertogenbosch",Nieuwe Dijk,25,'s-Hertogenbosch,51.67018669797972,5.339214438850055,2026-06-27 13:25:39,2026-06-27 13:25:39
+158,Simulated address near Branch Den Bosch,"Biesthoekstraat 14, Volkel",Biesthoekstraat,14,Volkel,51.62973294815802,5.656064881408199,2026-06-27 13:25:41,2026-06-27 13:25:41
+159,Simulated address near Branch Den Bosch,"Bergstraat 119, Goirle",Bergstraat,119,Goirle,51.51388837324806,5.06013458812298,2026-06-27 13:25:49,2026-06-27 13:25:49
+160,Simulated address near Branch Den Bosch,"Voorstraat 131, Beesd",Voorstraat,131,Beesd,51.88398682803729,5.188453650637429,2026-06-27 13:25:51,2026-06-27 13:25:51
+161,Simulated address near Branch Den Bosch,"Laag-Beugt 3b, Heeswijk-Dinther",Laag-Beugt,3b,Heeswijk-Dinther,51.64443842325766,5.497952175867078,2026-06-27 13:25:59,2026-06-27 13:25:59
+162,Simulated address near Branch Den Bosch,"Eikenbeemd 8, Baarschot",Eikenbeemd,8,Baarschot,51.471607936660085,5.174421766030577,2026-06-27 13:26:01,2026-06-27 13:26:01
+163,Simulated address near Branch Den Bosch,"John F. Kennedybaan 89, Oss",John F. Kennedybaan,89,Oss,51.786262334571184,5.497334217495794,2026-06-27 13:26:03,2026-06-27 13:26:03
+164,Simulated address near Branch Den Bosch,"Nachtegaalstraat 1, Sint-Michielsgestel",Nachtegaalstraat,1,Sint-Michielsgestel,51.63444064606254,5.36827578741861,2026-06-27 13:26:11,2026-06-27 13:26:11
+165,Simulated address near Branch Den Bosch,"Laarstraat 37a, Velddriel",Laarstraat,37a,Velddriel,51.76267883226491,5.3011018375960495,2026-06-27 13:26:15,2026-06-27 13:26:15
+166,Simulated address near Branch Den Bosch,"Luumpt 10, Balgoij",Luumpt,10,Balgoij,51.79062006253353,5.711723701829484,2026-06-27 13:26:27,2026-06-27 13:26:27
+167,Simulated address near Branch Den Bosch,"Bolst 18A, Erp",Bolst,18A,Erp,51.61140988767946,5.601586317111853,2026-06-27 13:26:43,2026-06-27 13:26:43
+168,Simulated address near Branch Den Bosch,"van Pallandtweg 20, Neerijnen",van Pallandtweg,20,Neerijnen,51.83417904553453,5.286095660021771,2026-06-27 13:26:45,2026-06-27 13:26:45
+169,Simulated address near Branch Den Bosch,"Peperstraat 5, Oirschot",Peperstraat,5,Oirschot,51.51266893555143,5.307087657577112,2026-06-27 13:26:47,2026-06-27 13:26:47
+170,Simulated address near Branch Den Bosch,"Vijfhuizenbaan 10A, Gilze",Vijfhuizenbaan,10A,Gilze,51.535903953949955,4.971726287849983,2026-06-27 13:26:49,2026-06-27 13:26:49
+171,Simulated address near Branch Den Bosch,"Nobelweg 12, Schijndel",Nobelweg,12,Schijndel,51.60790005281053,5.475953688387499,2026-06-27 13:26:53,2026-06-27 13:26:53
+172,Simulated address near Branch Den Bosch,"Pater van den Elsenpad 9, Goirle",Pater van den Elsenpad,9,Goirle,51.51767164039749,5.065002516197182,2026-06-27 13:26:56,2026-06-27 13:26:56
+173,Simulated address near Branch Den Bosch,"Heijtmorgen 55, Reek",Heijtmorgen,55,Reek,51.75057444279697,5.696187195858008,2026-06-27 13:26:57,2026-06-27 13:26:57
+174,Simulated address near Branch Den Bosch,"Bergstraat 47A, Loon op Zand",Bergstraat,47A,Loon op Zand,51.62610946431012,5.059736969057078,2026-06-27 13:27:01,2026-06-27 13:27:01
+175,Simulated address near Branch Den Bosch,"Oude Weistraat 11, Velddriel",Oude Weistraat,11,Velddriel,51.77614947993263,5.306813226639425,2026-06-27 13:27:03,2026-06-27 13:27:03
+176,Simulated address near Branch Den Bosch,"Molenstraat 35, Zeeland",Molenstraat,35,Zeeland,51.69713204733461,5.671214501002584,2026-06-27 13:27:05,2026-06-27 13:27:05
+177,Simulated address near Branch Den Bosch,"Wolderweg 8, Maasbommel",Wolderweg,8,Maasbommel,51.85042053694768,5.511734729295079,2026-06-27 13:27:09,2026-06-27 13:27:09
+178,Simulated address near Branch Den Bosch,"Berghuizen 3, Maasbommel",Berghuizen,3,Maasbommel,51.81888512582132,5.531820713225827,2026-06-27 13:27:13,2026-06-27 13:27:13
+179,Simulated address near Branch Den Bosch,"Veneind 5A-37, Wintelre",Veneind,5A-37,Wintelre,51.437372623087725,5.336358258980828,2026-06-27 13:27:15,2026-06-27 13:27:15
+180,Simulated address near Branch Den Bosch,"Rouwven 6, Wintelre",Rouwven,6,Wintelre,51.455437017403284,5.311907459622604,2026-06-27 13:27:17,2026-06-27 13:27:17
+181,Simulated address near Branch Den Bosch,"Lille 8A, Vessem",Lille,8A,Vessem,51.42477620636853,5.31082724633367,2026-06-27 13:27:25,2026-06-27 13:27:25
+182,Simulated address near Branch Den Bosch,"Polderweg 5, Oudheusden",Polderweg,5,Oudheusden,51.71853508665445,5.110631568171384,2026-06-27 13:27:29,2026-06-27 13:27:29
+183,Simulated address near Branch Den Bosch,"Veerstraat 29, Waardenburg",Veerstraat,29,Waardenburg,51.84259014564728,5.219394103988188,2026-06-27 13:27:31,2026-06-27 13:27:31
+184,Simulated address near Branch Den Bosch,"Achterst Ven 9B, Veghel",Achterst Ven,9B,Veghel,51.64016749708626,5.552856139999517,2026-06-27 13:27:35,2026-06-27 13:27:35
+185,Simulated address near Branch Den Bosch,"Burensewal 7a, Erichem",Burensewal,7a,Erichem,51.89016446677095,5.330018708303113,2026-06-27 13:27:37,2026-06-27 13:27:37
+186,Simulated address near Branch Den Bosch,"Zevenhuis 6, Zeeland",Zevenhuis,6,Zeeland,51.704051342425934,5.659775126405987,2026-06-27 13:27:50,2026-06-27 13:27:50
+187,Simulated address near Branch Den Bosch,"Eindsestraat 69A, Dongen",Eindsestraat,69A,Dongen,51.618286025525656,4.972086476781729,2026-06-27 13:27:54,2026-06-27 13:27:54
+188,Simulated address near Branch Den Bosch,"Waardhuizen 56, Waardhuizen",Waardhuizen,56,Waardhuizen,51.77755476288914,5.011607003172946,2026-06-27 13:27:57,2026-06-27 13:27:57
+189,Simulated address near Branch Den Bosch,"Toterfout 29, Veldhoven",Toterfout,29,Veldhoven,51.416391356309454,5.344901641730043,2026-06-27 13:27:59,2026-06-27 13:27:59
+190,Simulated address near Branch Den Bosch,"Zegenwerp 12, Sint-Michielsgestel",Zegenwerp,12,Sint-Michielsgestel,51.63156853147505,5.331124635237568,2026-06-27 13:28:01,2026-06-27 13:28:01
+191,Simulated address near Branch Den Bosch,"Stevertsemolen 44, Eindhoven",Stevertsemolen,44,Eindhoven,51.448660851975504,5.480607093583312,2026-06-27 13:28:11,2026-06-27 13:28:11
+192,Simulated address near Branch Den Bosch,"Patrijslaan 2, Best",Patrijslaan,2,Best,51.49490167954785,5.416346045854015,2026-06-27 13:28:14,2026-06-27 13:28:14
+193,Simulated address near Branch Den Bosch,"Kloosterstraat 76, Loon op Zand",Kloosterstraat,76,Loon op Zand,51.62793426818032,5.0956513705909945,2026-06-27 13:28:22,2026-06-27 13:28:22
+194,Simulated address near Branch Den Bosch,"Prinses Margrietstraat 14, Ravenswaaij",Prinses Margrietstraat,14,Ravenswaaij,51.942349573989574,5.325535999683623,2026-06-27 13:28:36,2026-06-27 13:28:36
+195,Simulated address near Branch Den Bosch,"Nieuwe Fellenoord 59, Eindhoven",Nieuwe Fellenoord,59,Eindhoven,51.44698377803606,5.472459613723139,2026-06-27 13:28:42,2026-06-27 13:28:42
+196,Simulated address near Branch Den Bosch,"Koevering 2, Sint-Oedenrode",Koevering,2,Sint-Oedenrode,51.58012844930289,5.4987754773049256,2026-06-27 13:28:48,2026-06-27 13:28:48
+197,Simulated address near Branch Den Bosch,"Kasterensestraat 17a, Liempde",Kasterensestraat,17a,Liempde,51.584425945761346,5.37202838441265,2026-06-27 13:29:00,2026-06-27 13:29:00
+198,Simulated address near Branch Den Bosch,"Vlagheideweg 6, Vorstenbosch",Vlagheideweg,6,Vorstenbosch,51.67871960481982,5.551482846591671,2026-06-27 13:29:02,2026-06-27 13:29:02
+199,Simulated address near Branch Den Bosch,"Fahrenheitstraat 26, 's-Hertogenbosch",Fahrenheitstraat,26,'s-Hertogenbosch,51.692269251873924,5.292598041550879,2026-06-27 13:29:04,2026-06-27 13:29:04
+200,Simulated address near Branch Den Bosch,"Heiligenboom 8E, Moergestel",Heiligenboom,8E,Moergestel,51.548206753597704,5.198971497293244,2026-06-27 13:29:10,2026-06-27 13:29:10
+201,Simulated address near Branch Den Bosch,"Damianenweg 5, Sint-Oedenrode",Damianenweg,5,Sint-Oedenrode,51.59322823004104,5.46079614104494,2026-06-27 13:29:16,2026-06-27 13:29:16
+202,Simulated address near Branch Den Bosch,"Statenweg 54a, Venhorst",Statenweg,54a,Venhorst,51.607370085808796,5.747800692911631,2026-06-27 13:29:22,2026-06-27 13:29:22
+203,Simulated address near Branch Den Bosch,"Rielsebaan 52, Gilze",Rielsebaan,52,Gilze,51.537465248639315,4.972736366699388,2026-06-27 13:29:24,2026-06-27 13:29:24
+204,Simulated address near Branch Den Bosch,"Meikampgraaf 3, Hellouw",Meikampgraaf,3,Hellouw,51.84004415810617,5.157995754033999,2026-06-27 13:29:32,2026-06-27 13:29:32
+205,Simulated address near Branch Den Bosch,"Grotestraat 49T, Heesbeen",Grotestraat,49T,Heesbeen,51.72688119753386,5.110205663944316,2026-06-27 13:29:34,2026-06-27 13:29:34
+206,Simulated address near Branch Den Bosch,"Expeditieweg 3, Boven-Leeuwen",Expeditieweg,3,Boven-Leeuwen,51.87814311188056,5.532994595831804,2026-06-27 13:29:50,2026-06-27 13:29:50

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import csv
 import math
 import random
+from pathlib import Path
 from typing import Any, Final
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from riool_service.database.models.branch import Branch
@@ -15,6 +17,66 @@ from riool_service.geocode_service import CoordinatesAddress, address_from_coord
 
 DEFAULT_LOCATION_GENERATION_SEED: Final[int] = 42
 DEFAULT_MAX_LOCATION_ATTEMPTS_MULTIPLIER: Final[int] = 20
+LOCATION_CSV_COLUMNS: Final[tuple[str, ...]] = (
+    "id",
+    "input_address",
+    "formatted_address",
+    "street",
+    "house_number",
+    "city",
+    "latitude",
+    "longitude",
+    "created_at",
+    "updated_at",
+)
+
+
+def seed_locations_from_csv(session: Session, csv_path: str | Path) -> int:
+    """Seed locations from a CSV export, preserving IDs when possible."""
+    path = Path(csv_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Locations CSV {path} was not found. Provide locations.csv, pass "
+            "--locations-csv with the correct path, or use --location-source random."
+        )
+
+    imported = 0
+    skipped = 0
+    with path.open(newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        missing_columns = set(LOCATION_CSV_COLUMNS) - set(reader.fieldnames or [])
+        if missing_columns:
+            raise ValueError(
+                f"Locations CSV {path} is missing columns: {sorted(missing_columns)}"
+            )
+
+        for row in reader:
+            location_id = _optional_int(row.get("id"))
+            if _location_already_exists(session, location_id, row.get("formatted_address")):
+                skipped += 1
+                continue
+
+            session.add(
+                Location(
+                    id=location_id,
+                    input_address=_required_string(row.get("input_address"), "input_address"),
+                    formatted_address=_optional_string(row.get("formatted_address")),
+                    street=_optional_string(row.get("street")),
+                    house_number=_optional_string(row.get("house_number")),
+                    city=_optional_string(row.get("city")),
+                    latitude=_required_float(row.get("latitude"), "latitude"),
+                    longitude=_required_float(row.get("longitude"), "longitude"),
+                )
+            )
+            imported += 1
+
+    session.flush()
+    _reset_location_id_sequence(session)
+    if imported or skipped:
+        print(f"Imported locations from {path}: {imported} inserted, {skipped} skipped")
+    else:
+        print(f"Locations CSV {path} contained no rows to import.")
+    return imported
 
 
 def seed_simulated_locations(session: Session, config: dict[str, Any]) -> None:
@@ -62,6 +124,7 @@ def seed_simulated_locations(session: Session, config: dict[str, Any]) -> None:
         seen_addresses = _known_formatted_addresses(session)
 
         while created < needed and attempts < max_attempts:
+            attempts += 1
             latitude, longitude = _random_coordinates_within_radius(
                 rng=rng,
                 latitude=float(branch.location.latitude),
@@ -94,6 +157,70 @@ def seed_simulated_locations(session: Session, config: dict[str, Any]) -> None:
             f"Seeded simulated locations for {branch_name}: "
             f"created {created}, total target {target_count}"
         )
+
+
+def _reset_location_id_sequence(session: Session) -> None:
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+
+    session.execute(
+        text(
+            "SELECT setval("
+            "pg_get_serial_sequence('locations', 'id'), "
+            "COALESCE((SELECT MAX(id) FROM locations), 1), "
+            "(SELECT COUNT(*) > 0 FROM locations)"
+            ")"
+        )
+    )
+
+
+def _location_already_exists(
+    session: Session,
+    location_id: int | None,
+    formatted_address: str | None,
+) -> bool:
+    if location_id is not None and session.get(Location, location_id) is not None:
+        return True
+
+    normalized_address = _optional_string(formatted_address)
+    if normalized_address is None:
+        return False
+
+    return (
+        session.scalar(
+            select(Location.id).where(Location.formatted_address == normalized_address)
+        )
+        is not None
+    )
+
+
+def _required_string(value: str | None, column: str) -> str:
+    normalized = _optional_string(value)
+    if normalized is None:
+        raise ValueError(f"Locations CSV row is missing required {column!r}")
+    return normalized
+
+
+def _optional_string(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _required_float(value: str | None, column: str) -> float:
+    normalized = _optional_string(value)
+    if normalized is None:
+        raise ValueError(f"Locations CSV row is missing required {column!r}")
+    return float(normalized)
+
+
+def _optional_int(value: str | None) -> int | None:
+    normalized = _optional_string(value)
+    if normalized is None:
+        return None
+    return int(normalized)
 
 
 def _simulated_location_from_address(
