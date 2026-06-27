@@ -46,7 +46,7 @@ from riool_service.services.planning_ai.optimizer import (
     UNPLANNED_URGENCY_TIEBREAKER,
     OVERTIME_PENALTY_PER_MINUTE,
 )
-from riool_service.services.planning_ai.routing import get_incremental_planning_route_matrix, get_planning_route_matrix
+from riool_service.services.planning_ai.routing import get_cached_planning_route_matrix, get_incremental_planning_route_matrix, get_planning_route_matrix
 from riool_service.services.planning_ai.selection import load_available_technicians, load_candidate_tickets
 
 
@@ -79,10 +79,60 @@ def _append_planning_debug_log(path: Path, message: str, **fields: Any) -> None:
         "message": message,
         **fields,
     }
+    line = json.dumps(payload, default=str, sort_keys=True)
+    # Also print the JSONL debug line to the backend console. This makes
+    # operational replanning problems visible immediately when running uvicorn.
+    print(f"[planning-ai-debug] {line}", flush=True)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
+        handle.write(line + "\n")
 
 
+
+def _debug_datetime(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _debug_assignment_dict(assignment: PlanningAssignment) -> dict[str, Any]:
+    ticket = assignment.ticket
+    return {
+        "assignment_id": assignment.id,
+        "ticket_id": assignment.ticket_id,
+        "ticket_number": getattr(ticket, "ticket_number", None) or getattr(ticket, "number", None),
+        "technician_id": assignment.technician_id,
+        "assignment_status": _value(assignment.status),
+        "ticket_status": _value(ticket.status) if ticket is not None else None,
+        "start": _debug_datetime(assignment.planned_start_at),
+        "end": _debug_datetime(assignment.planned_end_at),
+        "sequence_order": assignment.sequence_order,
+        "ticket_location_id": getattr(ticket, "location_id", None),
+        "locked_by_planner": assignment.locked_by_planner,
+    }
+
+
+def _debug_ticket_input_dict(ticket: TicketInput) -> dict[str, Any]:
+    return {
+        "ticket_id": ticket.id,
+        "location_id": ticket.location_id,
+        "service_minutes": ticket.service_minutes,
+        "urgency": _value(ticket.urgency),
+        "urgency_rank": ticket.urgency_rank,
+        "created_at": _debug_datetime(ticket.created_at),
+        "requirement_codes": sorted(ticket.requirement_codes),
+        "deadline_at": _debug_datetime(ticket.deadline_at),
+    }
+
+
+def _debug_technician_input_dict(technician: Any) -> dict[str, Any]:
+    return {
+        "technician_id": technician.id,
+        "name": getattr(technician, "name", None),
+        "start_location_id": technician.start_location_id,
+        "end_location_id": technician.end_location_id,
+        "office_location_id": technician.office_location_id,
+        "workday_start_minutes": technician.workday_start_minutes,
+        "workday_end_minutes": technician.workday_end_minutes,
+        "requirement_codes": sorted(getattr(technician, "requirement_codes", [])),
+    }
 
 
 TERMINAL_TICKET_STATUSES = {TicketStatus.COMPLETED, TicketStatus.CANCELLED}
@@ -1414,6 +1464,583 @@ def _persist_incremental_plan(
     )
     return planning_run
 
+
+def _minutes_after_midnight(value: datetime) -> int:
+    return value.hour * 60 + value.minute
+
+
+def _assignment_has_started_or_is_immutable_operationally(assignment: PlanningAssignment) -> bool:
+    """Return True for work that should define the live technician start state.
+
+    These assignments represent work that already happened or is happening now:
+    completed, driving, in-progress, or matching ticket statuses.  Manual
+    planner locks are intentionally *not* included here: they are preserved for
+    the board, but they should not move the optimizer start location/time or
+    otherwise constrain route scoring during operational replanning.
+    """
+    ticket_status = assignment.ticket.status if assignment.ticket is not None else None
+    return bool(
+        assignment.status in LOCKED_ASSIGNMENT_STATUSES
+        or ticket_status in LOCKED_TICKET_STATUSES
+    )
+
+
+def _operational_daytime_assignments(assignments: list[PlanningAssignment], base_date: date) -> list[PlanningAssignment]:
+    return sorted(
+        [
+            assignment
+            for assignment in assignments
+            if assignment.planned_start_at is not None
+            and assignment.planned_start_at.date() == base_date
+            and _assignment_has_started_or_is_immutable_operationally(assignment)
+        ],
+        key=lambda item: (item.technician_id, item.planned_start_at, item.sequence_order, item.id),
+    )
+
+
+def _preserved_operational_replan_assignments(
+    assignments: list[PlanningAssignment],
+    config: PlanningConfig,
+) -> list[PlanningAssignment]:
+    """Assignments copied into the new run but excluded from optimization.
+
+    This combines the live day work that already happened/is happening with any
+    manually locked planning-board assignments across the planning horizon.
+    Locked board assignments are kept so the frontend can still display them,
+    but they do not participate in the optimizer candidate set.
+    """
+    base_day = config.planned_date.date()
+    horizon_days = max(1, config.planning_horizon_days)
+    horizon_end = base_day + timedelta(days=horizon_days)
+    preserved: list[PlanningAssignment] = []
+    seen_assignment_ids: set[int] = set()
+    seen_ticket_ids: set[int] = set()
+    for assignment in assignments:
+        if assignment.planned_start_at is None:
+            continue
+        planned_day = assignment.planned_start_at.date()
+        in_horizon = base_day <= planned_day < horizon_end
+        should_preserve = (
+            assignment.planned_start_at.date() == base_day
+            and _assignment_has_started_or_is_immutable_operationally(assignment)
+        ) or (
+            in_horizon
+            and assignment.locked_by_planner
+        )
+        if not should_preserve:
+            continue
+        if assignment.id in seen_assignment_ids:
+            continue
+        if assignment.ticket_id is not None and assignment.ticket_id in seen_ticket_ids:
+            continue
+        seen_assignment_ids.add(assignment.id)
+        if assignment.ticket_id is not None:
+            seen_ticket_ids.add(assignment.ticket_id)
+        preserved.append(assignment)
+    return sorted(
+        preserved,
+        key=lambda item: (item.technician_id, item.planned_start_at, item.sequence_order, item.id),
+    )
+
+
+def _daytime_replan_technicians(
+    technicians: list[Any],
+    fixed_assignments: list[PlanningAssignment],
+) -> list[Any]:
+    """Shift each mechanic's day-0 optimizer start behind fixed work.
+
+    Completed, driving and in-progress assignments stay outside the optimizer and
+    are copied as-is into the new planning run. The optimizer receives a virtual
+    start location/time per mechanic that represents where that mechanic is after
+    the fixed prefix, so it plans on top of the live day instead of from 08:00.
+    """
+    last_fixed_by_technician: dict[int, PlanningAssignment] = {}
+    for assignment in fixed_assignments:
+        current = last_fixed_by_technician.get(assignment.technician_id)
+        if current is None or assignment.planned_end_at > current.planned_end_at:
+            last_fixed_by_technician[assignment.technician_id] = assignment
+
+    adjusted = []
+    for technician in technicians:
+        fixed = last_fixed_by_technician.get(technician.id)
+        if fixed is None or fixed.ticket is None or fixed.ticket.location_id is None:
+            adjusted.append(technician)
+            continue
+        adjusted.append(
+            replace(
+                technician,
+                start_location_id=fixed.ticket.location_id,
+                workday_start_minutes=max(
+                    technician.workday_start_minutes,
+                    _minutes_after_midnight(fixed.planned_end_at),
+                ),
+            )
+        )
+    return adjusted
+
+
+def _daytime_replan_candidate_tickets(
+    session: Session,
+    config: PlanningConfig,
+    technicians: list[Any],
+    base_assignments: list[PlanningAssignment],
+    preserved_assignments: list[PlanningAssignment],
+    *,
+    debug_log_path: Path | None = None,
+) -> list[TicketInput]:
+    technician_skill_sets = [technician.requirement_codes for technician in technicians]
+    preserved_ticket_ids = {assignment.ticket_id for assignment in preserved_assignments if assignment.ticket_id is not None}
+    by_id: dict[int, TicketInput] = {}
+    skipped: list[dict[str, Any]] = []
+    added_from_previous_plan: list[int] = []
+    added_from_open: list[int] = []
+
+    for assignment in base_assignments:
+        if assignment.ticket_id in preserved_ticket_ids:
+            skipped.append({"source": "previous_assignment", "ticket_id": assignment.ticket_id, "reason": "preserved_ticket_excluded_from_optimizer", "assignment": _debug_assignment_dict(assignment)})
+            continue
+        if assignment.ticket is None:
+            skipped.append({"source": "previous_assignment", "ticket_id": assignment.ticket_id, "reason": "assignment_has_no_ticket", "assignment_id": assignment.id})
+            continue
+        if assignment.ticket.status in TERMINAL_TICKET_STATUSES:
+            skipped.append({"source": "previous_assignment", "ticket_id": assignment.ticket_id, "reason": "terminal_ticket_status", "ticket_status": _value(assignment.ticket.status), "assignment": _debug_assignment_dict(assignment)})
+            continue
+        if assignment.status != PlanningAssignmentStatus.PLANNED:
+            skipped.append({"source": "previous_assignment", "ticket_id": assignment.ticket_id, "reason": "assignment_status_not_planned", "assignment": _debug_assignment_dict(assignment)})
+            continue
+        item = _ticket_to_input(assignment.ticket, config)
+        if item is None:
+            skipped.append({"source": "previous_assignment", "ticket_id": assignment.ticket_id, "reason": "ticket_to_input_returned_none", "assignment": _debug_assignment_dict(assignment)})
+            continue
+        if any(item.requirement_codes.issubset(skills) for skills in technician_skill_sets):
+            by_id[item.id] = item
+            added_from_previous_plan.append(item.id)
+        else:
+            skipped.append({"source": "previous_assignment", "ticket_id": assignment.ticket_id, "reason": "no_available_technician_has_required_skills", "ticket": _debug_ticket_input_dict(item)})
+
+    open_tickets = list(
+        session.scalars(
+            select(Ticket)
+            .options(
+                joinedload(Ticket.location),
+                joinedload(Ticket.subject),
+                joinedload(Ticket.ticket_requirements).joinedload(TicketRequirement.requirement),
+            )
+            .where(Ticket.branch_id == config.branch_id, Ticket.status == TicketStatus.OPEN)
+            .order_by(Ticket.created_at.asc(), Ticket.id.asc())
+        ).unique().all()
+    )
+    for ticket in open_tickets:
+        if ticket.id in preserved_ticket_ids:
+            skipped.append({"source": "open_ticket_query", "ticket_id": ticket.id, "reason": "preserved_ticket_excluded_from_optimizer"})
+            continue
+        item = _ticket_to_input(ticket, config)
+        if item is None:
+            skipped.append({"source": "open_ticket_query", "ticket_id": ticket.id, "reason": "ticket_to_input_returned_none"})
+            continue
+        if any(item.requirement_codes.issubset(skills) for skills in technician_skill_sets):
+            by_id[item.id] = item
+            added_from_open.append(item.id)
+        else:
+            skipped.append({"source": "open_ticket_query", "ticket_id": ticket.id, "reason": "no_available_technician_has_required_skills", "ticket": _debug_ticket_input_dict(item)})
+
+    result = list(by_id.values())
+    result.sort(key=lambda ticket: (ticket.urgency_rank, ticket.created_at, ticket.id))
+    if debug_log_path is not None:
+        _append_planning_debug_log(
+            debug_log_path,
+            "operational_candidate_ticket_selection",
+            previous_assignment_count=len(base_assignments),
+            preserved_ticket_ids=sorted(ticket_id for ticket_id in preserved_ticket_ids if ticket_id is not None),
+            open_ticket_query_count=len(open_tickets),
+            added_from_previous_plan=added_from_previous_plan,
+            added_from_open=added_from_open,
+            final_candidate_ticket_ids=[ticket.id for ticket in result],
+            final_candidate_tickets=[_debug_ticket_input_dict(ticket) for ticket in result],
+            skipped_count=len(skipped),
+            skipped=skipped,
+        )
+    return result
+
+
+def _build_daytime_replan_horizon_plan(
+    config: PlanningConfig,
+    technicians: list[Any],
+    day0_technicians: list[Any],
+    tickets: list[Any],
+    matrix: Any,
+    *,
+    planning_run_id: int | None = None,
+    debug_log_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    remaining_by_id = {ticket.id: ticket for ticket in tickets}
+    day_plans: list[dict[str, Any]] = []
+    for day_index in range(max(1, config.planning_horizon_days)):
+        if not remaining_by_id and day_index > 0:
+            break
+        day_config = _day_config(config, day_index)
+        day_technicians = day0_technicians if day_index == 0 else technicians
+        day_tickets = list(remaining_by_id.values())
+        if debug_log_path is not None:
+            _append_planning_debug_log(
+                debug_log_path,
+                "operational_horizon_day_started",
+                planning_run_id=planning_run_id,
+                day_index=day_index,
+                planned_date=day_config.planned_date.date().isoformat(),
+                remaining_ticket_ids=sorted(remaining_by_id),
+                remaining_ticket_count=len(remaining_by_id),
+                technician_states=[_debug_technician_input_dict(technician) for technician in day_technicians],
+                apply_unplanned_base_penalty=day_config.apply_unplanned_base_penalty,
+                defer_unplanned_penalty_minutes=day_config.defer_unplanned_penalty_minutes,
+                active_day_travel_penalty_multiplier=day_config.active_day_travel_penalty_multiplier,
+            )
+        optimizer = InitialRouteOptimizer(
+            config=day_config,
+            technicians=day_technicians,
+            tickets=day_tickets,
+            matrix=matrix,
+            debug_log_path=debug_log_path,
+            debug_label=(
+                f"operational_replan planning_run_id={planning_run_id} "
+                f"day_index={day_index} date={day_config.planned_date.date().isoformat()}"
+            ),
+        )
+        solution = optimizer.optimize()
+        stops_by_technician = {
+            technician_id: optimizer.build_stops(solution, technician_id)
+            for technician_id in solution.routes
+        }
+        planned_ids = {
+            stop.ticket.id
+            for stops in stops_by_technician.values()
+            for stop in stops
+        }
+        if debug_log_path is not None:
+            _append_planning_debug_log(
+                debug_log_path,
+                "operational_horizon_day_finished",
+                planning_run_id=planning_run_id,
+                day_index=day_index,
+                planned_date=day_config.planned_date.date().isoformat(),
+                planned_ticket_ids=sorted(planned_ids),
+                unplanned_ticket_ids=sorted(set(remaining_by_id) - planned_ids),
+                solution_unplanned_ticket_ids=sorted(solution.unplanned_ticket_ids),
+                route_ticket_ids={technician_id: list(route.ticket_ids) for technician_id, route in solution.routes.items()},
+                stop_windows={
+                    technician_id: [
+                        {
+                            "ticket_id": stop.ticket.id,
+                            "start": stop.planned_start_at.isoformat(),
+                            "end": stop.planned_end_at.isoformat(),
+                            "travel_before": stop.travel_minutes_before,
+                            "distance_before": stop.distance_km_before,
+                        }
+                        for stop in stops
+                    ]
+                    for technician_id, stops in stops_by_technician.items()
+                },
+                total_travel_minutes=solution.total_travel_minutes,
+                total_distance_km=solution.total_distance_km,
+                score=solution.score,
+            )
+        day_plans.append(
+            {
+                "day_index": day_index,
+                "config": day_config,
+                "optimizer": optimizer,
+                "solution": solution,
+                "tickets": day_tickets,
+                "planned_ticket_ids": planned_ids,
+            }
+        )
+        for ticket_id in planned_ids:
+            remaining_by_id.pop(ticket_id, None)
+    return day_plans
+
+
+def _copy_assignment_for_new_run(
+    assignment: PlanningAssignment,
+    *,
+    planning_run_id: int,
+    sequence_order: int,
+) -> PlanningAssignment:
+    return PlanningAssignment(
+        planning_run_id=planning_run_id,
+        branch_id=assignment.branch_id,
+        technician_id=assignment.technician_id,
+        ticket_id=assignment.ticket_id,
+        sequence_order=sequence_order,
+        planned_start_at=assignment.planned_start_at,
+        planned_end_at=assignment.planned_end_at,
+        estimated_duration_minutes=assignment.estimated_duration_minutes,
+        estimated_travel_minutes_before=assignment.estimated_travel_minutes_before,
+        estimated_distance_km_before=assignment.estimated_distance_km_before,
+        requires_hq_pickup=assignment.requires_hq_pickup,
+        hq_location_id=assignment.hq_location_id,
+        estimated_travel_minutes_to_hq=assignment.estimated_travel_minutes_to_hq,
+        estimated_distance_km_to_hq=assignment.estimated_distance_km_to_hq,
+        estimated_travel_minutes_hq_to_ticket=assignment.estimated_travel_minutes_hq_to_ticket,
+        estimated_distance_km_hq_to_ticket=assignment.estimated_distance_km_hq_to_ticket,
+        status=assignment.status,
+        source=assignment.source,
+        locked_by_planner=assignment.locked_by_planner,
+        manual_override_reason=assignment.manual_override_reason,
+    )
+
+
+def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Replan the active day around fixed, already-started work.
+
+    Unlike the overnight initial planner, this is intended for mid-day replans:
+    completed, driving and in-progress stops keep their original assignment
+    records in the new run, and remaining work is optimized from each mechanic's
+    current post-fixed location/time. Routing is read from route_cache only.
+    """
+    config = _config_from_payload(payload)
+    if _active_planning_run(session, config.branch_id) is not None:
+        active_run = _active_planning_run(session, config.branch_id)
+        raise ActivePlanningRunError(
+            f"Planning run {active_run.id} is already {_value(active_run.status).lower()} for branch {config.branch_id}."
+        )
+    latest_run = _latest_completed_planning_run(session, config.branch_id)
+    if latest_run is None:
+        raise PlanningAiError("Operational replanning needs an existing completed planning run to preserve fixed work.")
+
+    base_assignments = _replanning_base_assignments(session, latest_run.id)
+    base_date = config.planned_date.date()
+    operational_fixed_assignments = _operational_daytime_assignments(base_assignments, base_date)
+    preserved_assignments = _preserved_operational_replan_assignments(base_assignments, config)
+    technicians = load_available_technicians(session, config)
+
+    planning_run: PlanningRun | None = None
+    try:
+        planning_run = _create_visible_planning_run(
+            session,
+            branch_id=config.branch_id,
+            trigger_type=PlanningRunTrigger.PLANNER_INTERVENTION,
+            planned_date=config.planned_date,
+            notes=(
+                f"Operational daytime replanning from previous planning run {latest_run.id}. "
+                "Completed, driving and in-progress assignments were preserved; route matrix was loaded from DB only."
+            ),
+        )
+        debug_log_path = _planning_debug_log_path(planning_run.id)
+        _append_planning_debug_log(
+            debug_log_path,
+            "operational_replanning_debug_log_started",
+            planning_run_id=planning_run.id,
+            previous_planning_run_id=latest_run.id,
+            requested_config={
+                "branch_id": config.branch_id,
+                "planned_date": config.planned_date.isoformat(),
+                "base_date": base_date.isoformat(),
+                "planning_horizon_days": config.planning_horizon_days,
+                "initial_route_work_minutes_per_technician": config.initial_route_work_minutes_per_technician,
+                "latest_ticket_start_route_work_minutes": config.latest_ticket_start_route_work_minutes,
+                "today_travel_penalty_multiplier": config.today_travel_penalty_multiplier,
+                "defer_to_day_2_penalty_minutes": config.defer_to_day_2_penalty_minutes,
+                "defer_to_day_3_penalty_minutes": config.defer_to_day_3_penalty_minutes,
+                "multi_start_iterations": config.multi_start_iterations,
+                "local_search_iterations": config.local_search_iterations,
+                "random_seed": config.random_seed,
+            },
+            previous_assignment_count=len(base_assignments),
+            previous_assignments=[_debug_assignment_dict(assignment) for assignment in base_assignments],
+            operational_fixed_assignment_count=len(operational_fixed_assignments),
+            operational_fixed_assignment_ids=[assignment.id for assignment in operational_fixed_assignments],
+            operational_fixed_assignments=[_debug_assignment_dict(assignment) for assignment in operational_fixed_assignments],
+            preserved_assignment_count=len(preserved_assignments),
+            preserved_assignment_ids=[assignment.id for assignment in preserved_assignments],
+            preserved_assignments=[_debug_assignment_dict(assignment) for assignment in preserved_assignments],
+            preserved_locked_assignment_ids=[assignment.id for assignment in preserved_assignments if assignment.locked_by_planner],
+            loaded_technicians=[_debug_technician_input_dict(technician) for technician in technicians],
+        )
+
+        day0_technicians = _daytime_replan_technicians(technicians, operational_fixed_assignments)
+        _append_planning_debug_log(
+            debug_log_path,
+            "operational_day0_technician_start_states",
+            original_technicians=[_debug_technician_input_dict(technician) for technician in technicians],
+            adjusted_day0_technicians=[_debug_technician_input_dict(technician) for technician in day0_technicians],
+        )
+
+        tickets = _daytime_replan_candidate_tickets(
+            session,
+            config,
+            technicians,
+            base_assignments,
+            preserved_assignments,
+            debug_log_path=debug_log_path,
+        )
+        _append_planning_debug_log(
+            debug_log_path,
+            "operational_route_matrix_load_started",
+            technician_count=len(technicians),
+            day0_technician_count=len(day0_technicians),
+            ticket_count=len(tickets),
+            ticket_location_ids=sorted({ticket.location_id for ticket in tickets}),
+            technician_location_ids=sorted({
+                *[technician.start_location_id for technician in technicians],
+                *[technician.end_location_id for technician in technicians],
+                *[technician.office_location_id for technician in technicians],
+                *[technician.start_location_id for technician in day0_technicians],
+                *[technician.end_location_id for technician in day0_technicians],
+                *[technician.office_location_id for technician in day0_technicians],
+            }),
+        )
+        matrix = get_cached_planning_route_matrix(session, [*technicians, *day0_technicians], tickets)
+        _append_planning_debug_log(
+            debug_log_path,
+            "operational_route_matrix_load_finished",
+            travel_pair_count=len(matrix.travel_minutes),
+            distance_pair_count=len(matrix.distance_km),
+            sample_travel_pairs=[
+                {"from": from_id, "to": to_id, "minutes": minutes}
+                for (from_id, to_id), minutes in list(matrix.travel_minutes.items())[:25]
+            ],
+        )
+
+        day_plans = _build_daytime_replan_horizon_plan(
+            config,
+            technicians,
+            day0_technicians,
+            tickets,
+            matrix,
+            planning_run_id=planning_run.id,
+            debug_log_path=debug_log_path,
+        )
+
+        planned_ticket_ids: list[int] = []
+        previous_assignment_by_ticket_id = {assignment.ticket_id: assignment for assignment in base_assignments}
+        previous_ticket_status_by_ticket_id = {
+            assignment.ticket_id: assignment.ticket.status
+            for assignment in base_assignments
+            if assignment.ticket_id is not None and assignment.ticket is not None
+        }
+        sequence_by_technician: dict[int, int] = {technician.id: 1 for technician in technicians}
+        created_assignments: list[PlanningAssignment] = []
+
+        for assignment in preserved_assignments:
+            copied = _copy_assignment_for_new_run(
+                assignment,
+                planning_run_id=planning_run.id,
+                sequence_order=sequence_by_technician.get(assignment.technician_id, 1),
+            )
+            session.add(copied)
+            created_assignments.append(copied)
+            if assignment.ticket_id is not None:
+                planned_ticket_ids.append(assignment.ticket_id)
+            sequence_by_technician[assignment.technician_id] = sequence_by_technician.get(assignment.technician_id, 1) + 1
+
+        for day_plan in day_plans:
+            optimizer: InitialRouteOptimizer = day_plan["optimizer"]
+            solution: PlanningSolution = day_plan["solution"]
+            for technician_id, route in solution.routes.items():
+                sequence_by_technician.setdefault(technician_id, 1)
+                for stop in optimizer.build_stops(solution, technician_id):
+                    previous_assignment = previous_assignment_by_ticket_id.get(stop.ticket.id)
+                    assignment = PlanningAssignment(
+                        planning_run_id=planning_run.id,
+                        branch_id=config.branch_id,
+                        technician_id=technician_id,
+                        ticket_id=stop.ticket.id,
+                        sequence_order=sequence_by_technician[technician_id],
+                        planned_start_at=stop.planned_start_at,
+                        planned_end_at=stop.planned_end_at,
+                        estimated_duration_minutes=stop.ticket.service_minutes,
+                        estimated_travel_minutes_before=stop.travel_minutes_before,
+                        estimated_distance_km_before=stop.distance_km_before,
+                        requires_hq_pickup=stop.requires_hq_pickup,
+                        hq_location_id=stop.hq_location_id,
+                        estimated_travel_minutes_to_hq=stop.travel_minutes_to_hq,
+                        estimated_distance_km_to_hq=stop.distance_km_to_hq,
+                        estimated_travel_minutes_hq_to_ticket=stop.travel_minutes_hq_to_ticket,
+                        estimated_distance_km_hq_to_ticket=stop.distance_km_hq_to_ticket,
+                        status=PlanningAssignmentStatus.PLANNED,
+                        source=PlanningAssignmentSource.AI,
+                        locked_by_planner=(previous_assignment.locked_by_planner if previous_assignment is not None else False),
+                        manual_override_reason=(previous_assignment.manual_override_reason if previous_assignment is not None else None),
+                    )
+                    session.add(assignment)
+                    created_assignments.append(assignment)
+                    planned_ticket_ids.append(stop.ticket.id)
+                    sequence_by_technician[technician_id] += 1
+
+        # Re-sequence after all preserved and optimized assignments have been
+        # created so the board sorts by actual time, not by copy/optimization
+        # order. This is important when a locked assignment for tomorrow is
+        # copied before newly optimized same-technician work for that day.
+        for technician_id in {assignment.technician_id for assignment in created_assignments}:
+            technician_items = sorted(
+                [assignment for assignment in created_assignments if assignment.technician_id == technician_id],
+                key=lambda item: (
+                    item.planned_start_at or datetime.max,
+                    item.planned_end_at or datetime.max,
+                    item.sequence_order,
+                    item.ticket_id or 0,
+                ),
+            )
+            for sequence_order, assignment in enumerate(technician_items, start=1):
+                assignment.sequence_order = sequence_order
+
+        # Supersede the previous visible plan only after the replacement rows
+        # have been created.  The preserved assignment list contains live ORM
+        # objects from the previous run; marking the previous run as MOVED before
+        # copying them mutates those objects and causes the copied rows to be
+        # persisted as MOVED as well.  MOVED rows are intentionally hidden from
+        # the planning overview, which made completed/driving/in-progress locked
+        # tickets disappear after replanning.
+        _move_existing_active_assignments(
+            session,
+            config.branch_id,
+            exclude_planning_run_id=planning_run.id,
+        )
+
+        _append_planning_debug_log(
+            debug_log_path,
+            "operational_preserved_assignments_copied",
+            planning_run_id=planning_run.id,
+            preserved_assignment_count=len(preserved_assignments),
+            preserved_assignments=[_debug_assignment_dict(assignment) for assignment in preserved_assignments],
+            created_assignment_count=len(created_assignments),
+            created_assignment_ticket_ids=[assignment.ticket_id for assignment in created_assignments],
+        )
+
+        if planned_ticket_ids:
+            for ticket in session.query(Ticket).filter(Ticket.id.in_(planned_ticket_ids)).all():
+                previous_status = previous_ticket_status_by_ticket_id.get(ticket.id)
+                if previous_status in LOCKED_TICKET_STATUSES or previous_status == TicketStatus.CANCELLED:
+                    ticket.status = previous_status
+                elif ticket.status in {TicketStatus.OPEN, TicketStatus.PLANNED}:
+                    ticket.status = TicketStatus.PLANNED
+
+        summary = _horizon_summary(day_plans, tickets)
+        planning_run.status = PlanningRunStatus.COMPLETED
+        planning_run.completed_at = datetime.utcnow()
+        planning_run.score_total_distance_km = round(summary["total_distance_km"], 3)
+        planning_run.score_total_travel_minutes = int(summary["total_travel_minutes"])
+        planning_run.score_completed_tickets = len(set(planned_ticket_ids))
+        planning_run.score_unplanned_tickets = int(summary["unplanned_tickets"])
+        _append_planning_debug_log(
+            debug_log_path,
+            "operational_replanning_debug_log_finished",
+            planning_run_id=planning_run.id,
+            status=_value(planning_run.status),
+            summary=summary,
+        )
+        result = _horizon_solution_as_dict(config, day_plans)
+        result["planning_run_id"] = planning_run.id
+        result["planning_run_status"] = _value(planning_run.status)
+        result["debug_log_path"] = str(debug_log_path)
+        result["operational_fixed_assignment_count"] = len(operational_fixed_assignments)
+        result["preserved_assignment_count"] = len(preserved_assignments)
+        result["overview"] = get_planning_overview(session, branch_id=config.branch_id)
+        return result
+    except Exception as exc:
+        _mark_planning_run_failed(session, planning_run, exc)
+        raise
+
 def run_replanning(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     """Create a new plan and mark previous active assignments as moved.
 
@@ -1426,6 +2053,11 @@ def run_replanning(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
         raise ActivePlanningRunError(
             f"Planning run {active_run.id} is already {_value(active_run.status).lower()} for branch {branch_id}."
         )
+    latest_run = _latest_completed_planning_run(session, branch_id)
+    base_assignments = _replanning_base_assignments(session, latest_run.id if latest_run else None)
+    if any(_assignment_is_locked_for_incremental_replanning(assignment) for assignment in base_assignments):
+        return run_operational_replanning(session, payload)
+
     _move_existing_active_assignments(session, branch_id)
     result = run_initial_planning(session, payload)
     result["overview"] = get_planning_overview(session, branch_id=int(payload.get("branch_id") or 1))
@@ -2047,12 +2679,21 @@ def _total_workday_minutes(technicians: list[Technician]) -> int:
     return total
 
 
-def _move_existing_active_assignments(session: Session, branch_id: int) -> None:
+def _move_existing_active_assignments(
+    session: Session,
+    branch_id: int,
+    *,
+    exclude_planning_run_id: int | None = None,
+) -> None:
+    criteria = [
+        PlanningAssignment.branch_id == branch_id,
+        PlanningAssignment.status.in_(list(VISIBLE_ASSIGNMENT_STATUSES)),
+    ]
+    if exclude_planning_run_id is not None:
+        criteria.append(PlanningAssignment.planning_run_id != exclude_planning_run_id)
+
     assignments = session.scalars(
-        select(PlanningAssignment).where(
-            PlanningAssignment.branch_id == branch_id,
-            PlanningAssignment.status.in_(list(VISIBLE_ASSIGNMENT_STATUSES)),
-        )
+        select(PlanningAssignment).where(*criteria)
     ).all()
     ticket_ids = []
     for assignment in assignments:
@@ -2124,6 +2765,7 @@ def run_initial_planning(session: Session, payload: dict[str, Any]) -> dict[str,
         )
 
         planned_ticket_ids: list[int] = []
+        created_assignments: list[PlanningAssignment] = []
         sequence_by_technician: dict[int, int] = {technician.id: 1 for technician in technicians}
         for day_plan in day_plans:
             optimizer: InitialRouteOptimizer = day_plan["optimizer"]
@@ -2152,8 +2794,34 @@ def run_initial_planning(session: Session, payload: dict[str, Any]) -> dict[str,
                         source=PlanningAssignmentSource.AI,
                     )
                     session.add(assignment)
+                    created_assignments.append(assignment)
                     planned_ticket_ids.append(stop.ticket.id)
                     sequence_by_technician[technician_id] += 1
+
+        # Re-sequence after all preserved and optimized assignments have been
+        # created so the board sorts by actual time, not by copy/optimization
+        # order. This is important when a locked assignment for tomorrow is
+        # copied before newly optimized same-technician work for that day.
+        for technician_id in {assignment.technician_id for assignment in created_assignments}:
+            technician_items = sorted(
+                [assignment for assignment in created_assignments if assignment.technician_id == technician_id],
+                key=lambda item: (
+                    item.planned_start_at or datetime.max,
+                    item.planned_end_at or datetime.max,
+                    item.sequence_order,
+                    item.ticket_id or 0,
+                ),
+            )
+            for sequence_order, assignment in enumerate(technician_items, start=1):
+                assignment.sequence_order = sequence_order
+
+        _append_planning_debug_log(
+            debug_log_path,
+            "planning_assignments_persisted",
+            planning_run_id=planning_run.id,
+            created_assignment_count=len(created_assignments),
+            created_assignment_ticket_ids=[assignment.ticket_id for assignment in created_assignments],
+        )
 
         if planned_ticket_ids:
             for ticket in session.query(Ticket).filter(Ticket.id.in_(planned_ticket_ids)).all():

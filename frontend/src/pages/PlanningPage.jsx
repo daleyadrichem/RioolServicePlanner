@@ -280,11 +280,17 @@ export function PlanningPage() {
     <main className="page">
       <PageHeader title="Planning Overzicht">
         <div className="actions">
+          {hasPlan && (
+            <Button disabled={planButtonDisabled} onClick={() => runAction(() => api.operationalReplan(activeDate))}>
+              {(planningActionLoading || backendPlanningRunning) ? <Loader2 className="spin" size={20} /> : <RotateCw size={20} />}
+              Dag herplannen
+            </Button>
+          )}
           <Button primary disabled={planButtonDisabled} onClick={() => runAction(hasPlan ? api.replan : api.autoPlan)}>
             {(planningActionLoading || backendPlanningRunning) ? <Loader2 className="spin" size={20} /> : hasPlan ? <RotateCw size={20} /> : <Clock size={20} />}
             {planningActionLoading || backendPlanningRunning
               ? `Planning draait${runningPlanningRun?.id ? ` (#${runningPlanningRun.id})` : ''}...`
-              : hasPlan ? 'Herplannen' : 'Start planning'}
+              : hasPlan ? 'Volledig herplannen' : 'Start planning'}
           </Button>
         </div>
       </PageHeader>

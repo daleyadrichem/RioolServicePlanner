@@ -2,13 +2,21 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from riool_service.database.db_utils import get_session
+from riool_service.debug_logging import (
+    configure_debug_logging,
+    finish_request_context,
+    read_request_body_for_logging,
+    request_context_var,
+    request_id_var,
+    start_request_context,
+)
 from riool_service.services.simulator_service import service as simulator_service
 from riool_service.services.ticket_service import service as ticket_service
 from riool_service.services.routing import service as routing_service
@@ -148,8 +156,38 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def debug_logging_middleware(request: Request, call_next) -> Response:  # type: ignore[no-untyped-def]
+    """Log every API request and correlate it with database log events."""
+    body, _was_truncated = await read_request_body_for_logging(request)
+    request_id_token, request_context_token, started_at = start_request_context(request, body)
+    response_status_code: int | None = None
+
+    try:
+        response = await call_next(request)
+        response_status_code = response.status_code
+        response.headers["X-Riool-Request-ID"] = request_id_var.get() or ""
+        return response
+    except Exception as exc:
+        finish_request_context(
+            response_status_code=response_status_code,
+            started_at=started_at,
+            error=exc,
+        )
+        raise
+    finally:
+        if response_status_code is not None:
+            finish_request_context(
+                response_status_code=response_status_code,
+                started_at=started_at,
+            )
+        request_id_var.reset(request_id_token)
+        request_context_var.reset(request_context_token)
+
+
 @app.on_event("startup")
 def startup() -> None:
+    configure_debug_logging()
     simulator_service.ensure_simulator_tables()
     ticket_service.ensure_ticket_tables()
     routing_service.ensure_routing_tables()
@@ -290,6 +328,19 @@ def replan(session: SessionDep, payload: InitialPlanningPayload | None = Body(de
     try:
         data = payload.as_service_payload() if payload else InitialPlanningPayload().as_service_payload()
         result = planning_ai_service.run_replanning(session, data)
+        session.commit()
+        return result
+    except planning_ai_service.ActivePlanningRunError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/planning/operational-replan")
+def operational_replan(session: SessionDep, payload: InitialPlanningPayload | None = Body(default=None)) -> dict:
+    try:
+        data = payload.as_service_payload() if payload else InitialPlanningPayload().as_service_payload()
+        result = planning_ai_service.run_operational_replanning(session, data)
         session.commit()
         return result
     except planning_ai_service.ActivePlanningRunError as exc:

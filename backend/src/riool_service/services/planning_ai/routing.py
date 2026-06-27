@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from riool_service.database.models.location import Location
+from riool_service.database.models.route_cache import RouteCache, RouteProvider
 from riool_service.services.planning_ai.models import RouteMatrix, TechnicianInput, TicketInput
 from riool_service.services.routing.models import RoutePoint
 from riool_service.services.routing import service as routing_service
@@ -83,6 +85,94 @@ def get_planning_route_matrix(
             distance_km[(from_id, to_id)] = leg.distance_km
     return RouteMatrix(travel_minutes=travel_minutes, distance_km=distance_km)
 
+
+
+def get_cached_planning_route_matrix(
+    session: Session,
+    technicians: list[TechnicianInput],
+    tickets: list[TicketInput],
+) -> RouteMatrix:
+    """Load a complete planner matrix from the database only.
+
+    This is used by the daytime operational replanner. It must not call OSRM or
+    any external routing provider; all directed pairs are expected to already be
+    present in route_cache.
+    """
+    location_ids = sorted(
+        {
+            *[technician.start_location_id for technician in technicians],
+            *[technician.end_location_id for technician in technicians],
+            *[technician.office_location_id for technician in technicians],
+            *[ticket.location_id for ticket in tickets],
+        }
+    )
+    logger.debug(
+        "Cached-only planning route matrix requested: technicians=%s tickets=%s unique_locations=%s",
+        len(technicians),
+        len(tickets),
+        len(location_ids),
+    )
+    print(
+        "[planning-ai-debug] cached_route_matrix_requested "
+        f"technicians={len(technicians)} tickets={len(tickets)} "
+        f"unique_locations={len(location_ids)} location_ids={location_ids}",
+        flush=True,
+    )
+    if len(location_ids) < 2:
+        return RouteMatrix(travel_minutes={}, distance_km={})
+
+    rows = session.scalars(
+        select(RouteCache).where(
+            RouteCache.provider == RouteProvider.OSRM,
+            RouteCache.from_location_id.in_(location_ids),
+            RouteCache.to_location_id.in_(location_ids),
+        )
+    ).all()
+    print(
+        "[planning-ai-debug] cached_route_matrix_rows_loaded "
+        f"row_count={len(rows)} expected_directed_pairs={max(0, len(location_ids) * (len(location_ids) - 1))}",
+        flush=True,
+    )
+    cached = {
+        (row.from_location_id, row.to_location_id): row
+        for row in rows
+    }
+
+    travel_minutes: dict[tuple[int, int], int] = {}
+    distance_km: dict[tuple[int, int], float] = {}
+    missing_pairs: list[tuple[int, int]] = []
+    for from_id in location_ids:
+        for to_id in location_ids:
+            if from_id == to_id:
+                travel_minutes[(from_id, to_id)] = 0
+                distance_km[(from_id, to_id)] = 0.0
+                continue
+            leg = cached.get((from_id, to_id))
+            if leg is None:
+                missing_pairs.append((from_id, to_id))
+                continue
+            travel_minutes[(from_id, to_id)] = int(leg.travel_minutes)
+            distance_km[(from_id, to_id)] = float(leg.distance_km)
+
+    if missing_pairs:
+        sample = ", ".join(f"{a}->{b}" for a, b in missing_pairs[:10])
+        suffix = "..." if len(missing_pairs) > 10 else ""
+        print(
+            "[planning-ai-debug] cached_route_matrix_missing_pairs "
+            f"missing_count={len(missing_pairs)} sample={sample}{suffix}",
+            flush=True,
+        )
+        raise PlanningRoutingError(
+            "Operational daytime replanning uses the database routing matrix only; "
+            f"{len(missing_pairs)} directed route pair(s) are missing from route_cache: {sample}{suffix}."
+        )
+
+    print(
+        "[planning-ai-debug] cached_route_matrix_finished "
+        f"travel_pairs={len(travel_minutes)} distance_pairs={len(distance_km)}",
+        flush=True,
+    )
+    return RouteMatrix(travel_minutes=travel_minutes, distance_km=distance_km)
 
 def get_incremental_planning_route_matrix(
     session: Session,

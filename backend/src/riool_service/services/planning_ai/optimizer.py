@@ -88,8 +88,10 @@ class InitialRouteOptimizer:
             "message": message,
             **fields,
         }
+        line = json.dumps(payload, default=str, sort_keys=True)
+        print(f"[planning-ai-debug] {line}", flush=True)
         with self.debug_log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
+            handle.write(line + "\n")
 
     def optimize(self) -> PlanningSolution:
         self._debug(
@@ -960,7 +962,15 @@ class InitialRouteOptimizer:
         current_time = planning_day_start(self.config, route.technician)
         previous_location_id = route.technician.start_location_id
         previous_ticket_id: int | None = None
-        break_taken = False
+        break_start, break_end = self._break_window()
+        latest_break_start = break_end - timedelta(minutes=self.config.break_duration_minutes)
+        # Operational replanning can start a technician mid-day, after fixed
+        # completed/in-progress/driving tickets. If that start time is already
+        # past the last possible lunch-break start, treat lunch as already
+        # handled outside the replanned remainder of the day. Otherwise every
+        # candidate solution becomes globally infeasible even when the ticket
+        # being evaluated is assigned to another technician.
+        break_taken = current_time > latest_break_start
         pickup_done = False
         route_supply_requirement_codes = frozenset(
             code

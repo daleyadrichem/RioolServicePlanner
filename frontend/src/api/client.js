@@ -63,6 +63,7 @@ export const api = {
   },
   autoPlan: () => request('/planning/auto-plan', { method: 'POST' }),
   replan: () => request('/planning/replan', { method: 'POST' }),
+  operationalReplan: (plannedDate) => request('/planning/operational-replan', { method: 'POST', body: JSON.stringify(plannedDate ? { planned_date: plannedDate } : {}) }),
   getSimulatorState: () => request('/simulator/state'),
   getSimulatorStatistics: () => request('/simulator/statistics'),
   getTechnicianSimulatorStates: () => request('/simulator/technicians'),
