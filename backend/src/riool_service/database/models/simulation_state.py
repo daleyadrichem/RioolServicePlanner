@@ -40,7 +40,7 @@ class SimulationState(Base):
     day_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     day_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    speed_multiplier: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    speed_multiplier: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     last_tick_real_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     activity_log: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)

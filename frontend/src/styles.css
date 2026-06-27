@@ -77,7 +77,7 @@
   grid-template-columns:minmax(620px,1fr) minmax(320px,380px);
 }
 .simLayout{
-  grid-template-columns:minmax(650px,1fr) minmax(320px,390px);
+  grid-template-columns:minmax(560px,1fr) minmax(380px,440px);
 }
 .tableCard{
   overflow:auto;
@@ -86,7 +86,7 @@
   min-width:980px;
 }
 .simTable table{
-  min-width:900px;
+  min-width:820px;
 }
 .detail,.newTicket,.controls,.activity{
   min-width:0;
@@ -114,7 +114,7 @@
   .job{padding:6px 8px;font-size:10.5px;}
   .timeline{grid-template-columns:32px 1fr;}
   .ticketsLayout{grid-template-columns:minmax(580px,1fr) 330px;}
-  .simLayout{grid-template-columns:minmax(600px,1fr) 330px;}
+  .simLayout{grid-template-columns:minmax(540px,1fr) 390px;}
 }
 
 @media (max-width: 1280px){

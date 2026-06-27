@@ -521,6 +521,34 @@ def delete_ticket(session: Session, ticket_id: int) -> dict[str, Any]:
     ticket = session.get(Ticket, ticket_id)
     if ticket is None:
         raise TicketNotFoundError(f"Ticket {ticket_id} was not found")
-    session.delete(ticket)
+
+    # Delete the ticket itself *and* every direct dependent row that points to it.
+    # Some deployed databases were created without ON DELETE CASCADE on the foreign
+    # keys, and SQLAlchemy's default relationship handling can otherwise try to set
+    # non-nullable columns like planning_assignments.ticket_id to NULL. That causes
+    # the API request to fail before the ticket is actually removed.
+    table = Ticket.__table__
+    primary_key = table.c.id
+    deleted_dependents = 0
+
+    for dependent_table in reversed(Base.metadata.sorted_tables):
+        if dependent_table is table:
+            continue
+
+        referencing_columns = [
+            foreign_key.parent
+            for foreign_key in dependent_table.foreign_keys
+            if foreign_key.column.table is table
+        ]
+        for referencing_column in referencing_columns:
+            result = session.execute(
+                dependent_table.delete().where(referencing_column == ticket_id)
+            )
+            deleted_dependents += result.rowcount or 0
+
+    result = session.execute(table.delete().where(primary_key == ticket_id))
+    if not result.rowcount:
+        raise TicketNotFoundError(f"Ticket {ticket_id} was not found")
+
     session.flush()
-    return {"deleted": True, "id": ticket_id}
+    return {"deleted": True, "id": ticket_id, "deleted_dependents": deleted_dependents}

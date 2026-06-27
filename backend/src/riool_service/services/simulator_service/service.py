@@ -28,7 +28,8 @@ from riool_service.geocode_service import coordinates_from_address
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[4] / "config" / "ticket_scenarios_config.json"
 DEFAULT_STATE_ID = 1
-DEFAULT_SPEED = 5
+DEFAULT_SPEED = 1
+ALLOWED_SPEEDS = {1, 10, 60, 120}
 MAX_ACTIVITY_ITEMS = 20
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,9 @@ def get_or_create_state(session: Session) -> SimulationState:
     ensure_simulator_tables()
     state = session.get(SimulationState, DEFAULT_STATE_ID)
     if state is not None:
+        if state.speed_multiplier not in ALLOWED_SPEEDS:
+            state.speed_multiplier = DEFAULT_SPEED
+            session.flush()
         return state
 
     scenario = get_scenario_or_raise("normale_dag")
@@ -629,8 +633,8 @@ def stop(session: Session, clear_remaining_injections: bool = True) -> dict[str,
 
 
 def set_speed(session: Session, speed_multiplier: int) -> dict[str, Any]:
-    if speed_multiplier not in {1, 5, 10, 20, 50, 60, 100, 120}:
-        raise ValueError("speed_multiplier must be one of: 1, 5, 10, 20, 50, 60, 100, 120")
+    if speed_multiplier not in ALLOWED_SPEEDS:
+        raise ValueError("speed_multiplier must be one of: 1, 10, 60, 120")
     state = get_or_create_state(session)
     advance_state_clock(state)
     state.speed_multiplier = speed_multiplier

@@ -399,7 +399,7 @@ def stop_simulation(session: SessionDep) -> dict:
 
 
 @app.patch("/simulator/speed")
-def set_simulation_speed(session: SessionDep, speed_multiplier: int = Query(default=5, ge=1, le=150)) -> dict:
+def set_simulation_speed(session: SessionDep, speed_multiplier: int = Query(default=1, ge=1, le=150)) -> dict:
     try:
         result = simulator_service.set_speed(session, speed_multiplier=speed_multiplier)
         session.commit()

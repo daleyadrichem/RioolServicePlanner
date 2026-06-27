@@ -1,4 +1,4 @@
-import { AlertTriangle, Calendar, CheckCircle2, Clock, Edit, MapPin, Plus, Save, SlidersHorizontal, Trash2, Wrench, X, Ticket as TicketIcon } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, Edit, MapPin, Plus, Save, SlidersHorizontal, Trash2, Wrench, X, Ticket as TicketIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
@@ -276,7 +276,7 @@ function TicketsTable({ tickets, selectedId, onSelect, onEdit, page, pageSize, t
   );
 }
 
-function TicketDetail({ ticket, onDelete, onAssign, onDone, onEdit }) {
+function TicketDetail({ ticket, onDelete, onEdit }) {
   if (!ticket) return <aside className="detail"><h2>Selecteer een ticket</h2></aside>;
   return (
     <aside className="detail">
@@ -293,8 +293,6 @@ function TicketDetail({ ticket, onDelete, onAssign, onDone, onEdit }) {
       <p>{ticket.description || 'Geen omschrijving ingevuld.'}</p>
       <h3>Monteur</h3>
       <p>{ticket.technician_name || 'Nog niet toegewezen'}</p>
-      <Button primary className="full" onClick={onAssign}><Calendar size={18} />Auto toewijzen</Button>
-      <Button className="full" onClick={onDone}><CheckCircle2 size={18} />Markeer afgerond</Button>
       <Button className="full" onClick={onEdit}><Wrench size={18} />Bewerken</Button>
       <Button danger className="full" onClick={onDelete}><Trash2 size={18} />Verwijderen</Button>
     </aside>
@@ -524,9 +522,10 @@ export function TicketsPage() {
         />
         <TicketDetail
           ticket={selected}
-          onDelete={() => selected && runAction(() => api.deleteTicket(apiTicketId(selected)))}
-          onAssign={() => runAction(() => api.autoPlan())}
-          onDone={() => selected && runAction(() => api.updateTicket(apiTicketId(selected), { status: 'completed' }))}
+          onDelete={() => selected && runAction(async () => {
+            await api.deleteTicket(apiTicketId(selected));
+            setSelectedId(null);
+          })}
           onEdit={() => selected && openEditTicket(selected)}
         />
       </div>

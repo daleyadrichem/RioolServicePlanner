@@ -1,9 +1,14 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 async function request(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (options.body && !(options.body instanceof FormData)) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  }
+
   const response = await fetch(`${API_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
+    headers,
   });
   if (!response.ok) {
     const rawDetail = await response.text();
@@ -23,8 +28,11 @@ async function request(path, options = {}) {
     }
     throw new Error(String(detail || `API request failed: ${response.status}`));
   }
-  return response.json();
+  if (response.status === 204) return null;
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
+
 
 export const api = {
   health: () => request('/health'),

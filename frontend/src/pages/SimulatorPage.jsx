@@ -347,6 +347,13 @@ export function SimulatorPage() {
     if (simulationIsRunning) setEditingTicket(null);
   }, [simulationIsRunning]);
 
+
+  useEffect(() => {
+    if (!selectedScenarioId && scenarioList.length) {
+      setSelectedScenarioId(scenarioList[0].id);
+    }
+  }, [scenarioList, selectedScenarioId]);
+
   const filteredInjections = useMemo(() => (injections || []).filter((row) => matchesFilter(row, filters)), [injections, filters]);
   const stats = state.stats || emptySimulatorState.stats;
   const saveSimulationTicket = async (payload) => {
@@ -368,7 +375,11 @@ export function SimulatorPage() {
         scenarios={scenarioList}
         selectedScenarioId={selectedScenarioId}
         onScenarioChange={setSelectedScenarioId}
-        onGenerate={() => simulationIsRunning ? undefined : runAction(() => api.generateScenarioTickets(selectedScenarioId))}
+        onGenerate={() => {
+          if (simulationIsRunning) return undefined;
+          const scenarioId = selectedScenarioId || scenarioList[0]?.id;
+          return scenarioId ? runAction(() => api.generateScenarioTickets(scenarioId)) : window.alert('Selecteer eerst een scenario.');
+        }}
         state={state}
         onToggleSimulation={() => runAction(isSimulationRunning(state.status) ? api.pauseSimulation : api.startSimulation)}
         onStop={() => runAction(api.stopSimulation)}
