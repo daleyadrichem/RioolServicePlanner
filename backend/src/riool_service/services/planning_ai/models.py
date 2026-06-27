@@ -28,6 +28,12 @@ class PlanningConfig:
     # above the 6h target is allowed and penalized softly in the score.
     latest_ticket_start_route_work_minutes: int = 5 * 60
     travel_penalty_per_minute: int = 25
+    # Multiplier applied to travel minutes in the optimizer score for the active
+    # planning day. In multi-day planning this defaults to 5x for today and 1x
+    # for later days, so the first day is optimized more aggressively for route
+    # efficiency while future days mainly protect SLA feasibility.
+    today_travel_penalty_multiplier: float = 5.0
+    active_day_travel_penalty_multiplier: float = 1.0
     planning_horizon_days: int = 3
     # Soft penalty, expressed as equivalent extra driving minutes, for leaving a
     # ticket unplanned today and therefore pushing it to a later day.

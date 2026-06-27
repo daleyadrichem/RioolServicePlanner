@@ -1732,6 +1732,11 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
             payload.get("latest_ticket_start_route_work_minutes") or 300
         ),
         travel_penalty_per_minute=int(payload.get("travel_penalty_per_minute") or 25),
+        today_travel_penalty_multiplier=float(
+            payload.get("today_travel_penalty_multiplier")
+            if payload.get("today_travel_penalty_multiplier") is not None
+            else 5.0
+        ),
         planning_horizon_days=max(1, int(payload.get("planning_horizon_days") or 3)),
         defer_to_day_2_penalty_minutes=int(
             payload.get("defer_to_day_2_penalty_minutes") or 45
@@ -1791,6 +1796,9 @@ def _build_horizon_plan(
             planned_date=config.planned_date + timedelta(days=day_index),
             random_seed=(config.random_seed + day_index if isinstance(config.random_seed, int) else config.random_seed),
             defer_unplanned_penalty_minutes=defer_unplanned_penalty_minutes,
+            active_day_travel_penalty_multiplier=(
+                max(0.0, config.today_travel_penalty_multiplier) if day_index == 0 else 1.0
+            ),
         )
         remaining_tickets = sorted(
             remaining_by_id.values(),
@@ -1901,6 +1909,7 @@ def _horizon_solution_as_dict(config: PlanningConfig, day_plans: list[dict[str, 
             0, 8 * 60 - config.initial_route_work_minutes_per_technician
         ),
         "travel_penalty_per_minute": config.travel_penalty_per_minute,
+        "today_travel_penalty_multiplier": config.today_travel_penalty_multiplier,
         "defer_to_day_2_penalty_minutes": config.defer_to_day_2_penalty_minutes,
         "defer_to_day_3_penalty_minutes": config.defer_to_day_3_penalty_minutes,
         "multi_start_iterations": config.multi_start_iterations,
@@ -2005,6 +2014,10 @@ def _solution_as_dict(
                 config.latest_ticket_start_route_work_minutes
             ),
             "travel_penalty_per_minute": config.travel_penalty_per_minute,
+            "active_day_travel_penalty_multiplier": config.active_day_travel_penalty_multiplier,
+            "effective_travel_penalty_per_minute": (
+                config.travel_penalty_per_minute * config.active_day_travel_penalty_multiplier
+            ),
             "defer_unplanned_penalty_minutes": config.defer_unplanned_penalty_minutes,
             "penalty_weights": {
                 "sla_miss": SLA_MISS_PENALTY,
@@ -2014,6 +2027,10 @@ def _solution_as_dict(
                 "unplanned_low_tiebreaker": UNPLANNED_URGENCY_TIEBREAKER[TicketUrgency.LOW],
                 "overtime_per_minute": OVERTIME_PENALTY_PER_MINUTE,
                 "travel_per_minute": config.travel_penalty_per_minute,
+                "active_day_travel_multiplier": config.active_day_travel_penalty_multiplier,
+                "effective_travel_per_minute": (
+                    config.travel_penalty_per_minute * config.active_day_travel_penalty_multiplier
+                ),
                 "defer_unplanned_per_ticket": (
                     config.defer_unplanned_penalty_minutes * config.travel_penalty_per_minute
                 ),
@@ -2026,6 +2043,7 @@ def _solution_as_dict(
             "Every mechanic gets a 45 minute break planned inside the 11:00-13:00 window.",
             "A route with one or more supply requirements gets one HQ pickup before the first supply ticket.",
             "Travel and break blocks are returned as explicit timeline items, instead of appearing as gaps between tickets.",
+            "Today's driving minutes are weighted more heavily than future-day driving minutes; default today multiplier is 5x.",
             "Deadline misses are soft score penalties, not hard feasibility blockers; medium and low are not separated into priority bands.",
         ],
         "routes": routes,

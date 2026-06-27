@@ -90,6 +90,7 @@ class InitialPlanningPayload(BaseModel):
     initial_route_work_minutes_per_technician: int = 360
     latest_ticket_start_route_work_minutes: int = 300
     travel_penalty_per_minute: int = 25
+    today_travel_penalty_multiplier: float = 5.0
     planning_horizon_days: int = 3
     defer_to_day_2_penalty_minutes: int = 45
     defer_to_day_3_penalty_minutes: int = 120

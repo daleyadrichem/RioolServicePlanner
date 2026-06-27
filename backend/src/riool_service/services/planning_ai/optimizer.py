@@ -91,7 +91,7 @@ class InitialRouteOptimizer:
             "If a route contains tickets with requirements, a single HQ pickup is inserted before the first required ticket.",
             "Initial route workload is capped using service + travel + HQ pickup time, so urgent-ticket capacity remains free.",
             "Deadline misses are scored softly instead of blocking otherwise efficient medium/low plans.",
-            "Every minute of travel, including HQ detours and return-home travel, is penalized equally in the score.",
+            "Today's travel minutes are weighted more heavily than future-day travel minutes in multi-day planning.",
             "Travel time can outweigh the small medium-over-low tie-breaker.",
         ]
         return best
@@ -321,6 +321,15 @@ class InitialRouteOptimizer:
                     best = insertion
         return best
 
+    def _effective_travel_penalty_per_minute(self) -> float:
+        """Travel penalty after applying the active-day multiplier.
+
+        Multi-day planning uses this to make today route-efficient without
+        over-optimizing tomorrow/the day after, since future tickets may still
+        change as new work comes in during the day.
+        """
+        return max(0, self.config.travel_penalty_per_minute) * max(0.0, self.config.active_day_travel_penalty_multiplier)
+
     def _evaluate_insertion(
         self,
         solution: PlanningSolution,
@@ -359,8 +368,8 @@ class InitialRouteOptimizer:
         # without too much extra route work? The completion reward makes it very
         # attractive to get tickets off the board, while the urgency tie-breaker
         # is deliberately small so medium-vs-low priority does not swamp travel.
-        travel_penalty = max(0, self.config.travel_penalty_per_minute)
-        defer_penalty = max(0, self.config.defer_unplanned_penalty_minutes) * travel_penalty
+        travel_penalty = self._effective_travel_penalty_per_minute()
+        defer_penalty = max(0, self.config.defer_unplanned_penalty_minutes) * max(0, self.config.travel_penalty_per_minute)
         priority_bonus = (
             TICKET_COMPLETION_REWARD
             + UNPLANNED_URGENCY_TIEBREAKER[ticket.urgency]
@@ -474,7 +483,7 @@ class InitialRouteOptimizer:
             + unplanned_penalty
             + overtime * OVERTIME_PENALTY_PER_MINUTE
             + route_work_overflow_penalty
-            + total_travel * max(0, self.config.travel_penalty_per_minute)
+            + total_travel * self._effective_travel_penalty_per_minute()
         )
 
     def _route_timeline(
