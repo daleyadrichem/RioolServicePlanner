@@ -4,6 +4,9 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from itertools import combinations
+import json
+from pathlib import Path
+from typing import Any
 
 from riool_service.database.models.tickets import TicketUrgency
 from riool_service.services.planning_ai.models import (
@@ -57,6 +60,8 @@ class InitialRouteOptimizer:
         technicians: list[TechnicianInput],
         tickets: list[TicketInput],
         matrix: RouteMatrix,
+        debug_log_path: str | Path | None = None,
+        debug_label: str | None = None,
     ) -> None:
         self.config = config
         self.technicians = technicians
@@ -64,23 +69,70 @@ class InitialRouteOptimizer:
         self.ticket_by_id = {ticket.id: ticket for ticket in tickets}
         self.matrix = matrix
         self.random = random.Random(config.random_seed)
+        self.debug_log_path = Path(debug_log_path) if debug_log_path is not None else None
+        self.debug_label = debug_label or f"planning_date={config.planned_date.date().isoformat()}"
+
+    def _debug(self, message: str, **fields: Any) -> None:
+        """Append high-volume optimizer diagnostics to the per-planning-run log file.
+
+        This intentionally bypasses the normal Python logger: these messages are
+        verbose enough to be useful for explaining optimizer choices, but too
+        noisy for the application log stream.
+        """
+        if self.debug_log_path is None:
+            return
+        self.debug_log_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "timestamp": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+            "label": self.debug_label,
+            "message": message,
+            **fields,
+        }
+        with self.debug_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
 
     def optimize(self) -> PlanningSolution:
+        self._debug(
+            "optimizer_started",
+            config=self._debug_config_dict(),
+            technician_count=len(self.technicians),
+            ticket_count=len(self.tickets),
+            technicians=[self._debug_technician_dict(technician) for technician in self.technicians],
+            tickets=[self._debug_ticket_dict(ticket) for ticket in self.tickets],
+        )
         if not self.technicians:
             raise ValueError("At least one technician is required")
         if not self.tickets:
             solution = self._empty_solution()
             self._score(solution)
+            self._debug("optimizer_finished_empty", score_breakdown=self._score_breakdown(solution))
             return solution
 
         best: PlanningSolution | None = None
         iterations = max(1, self.config.multi_start_iterations)
         for iteration in range(iterations):
+            self._debug("planning_candidate_started", candidate_number=iteration + 1, total_candidates=iterations)
             solution = self._build_initial_solution(iteration=iteration)
             solution = self._improve(solution)
             self._score(solution)
+            score_breakdown = self._score_breakdown(solution)
+            self._debug(
+                "planning_candidate_finished",
+                candidate_number=iteration + 1,
+                total_candidates=iterations,
+                total_cost_for_found_planning=solution.score,
+                score_breakdown=score_breakdown,
+                route_summary=self._debug_solution_routes(solution),
+            )
             if best is None or solution.score < best.score:
+                previous_best = None if best is None else best.score
                 best = solution
+                self._debug(
+                    "planning_candidate_became_best",
+                    candidate_number=iteration + 1,
+                    previous_best_cost=previous_best,
+                    new_best_cost=solution.score,
+                )
 
         assert best is not None
         best.algorithm_notes = [
@@ -92,8 +144,15 @@ class InitialRouteOptimizer:
             "Initial route workload is capped using service + travel + HQ pickup time, so urgent-ticket capacity remains free.",
             "Deadline misses are scored softly instead of blocking otherwise efficient medium/low plans.",
             "Today's travel minutes are weighted more heavily than future-day travel minutes in multi-day planning.",
+            "In multi-day planning, non-final days treat leftover tickets as deferred rather than truly unplanned.",
             "Travel time can outweigh the small medium-over-low tie-breaker.",
         ]
+        self._debug(
+            "optimizer_finished",
+            selected_total_cost=best.score,
+            selected_score_breakdown=self._score_breakdown(best),
+            selected_routes=self._debug_solution_routes(best),
+        )
         return best
 
     def build_stops(self, solution: PlanningSolution, technician_id: int) -> list[PlannedStop]:
@@ -119,6 +178,11 @@ class InitialRouteOptimizer:
     def _build_initial_solution(self, *, iteration: int) -> PlanningSolution:
         solution = self._empty_solution()
         remaining = self._ordered_tickets_for_start(iteration)
+        self._debug(
+            "initial_solution_build_started",
+            iteration=iteration,
+            ordered_ticket_ids=[ticket.id for ticket in remaining],
+        )
 
         self._seed_routes(solution, remaining, iteration=iteration)
 
@@ -127,10 +191,33 @@ class InitialRouteOptimizer:
             insertion = self._best_insertion(solution, ticket, allow_low_priority=True)
             if insertion is None:
                 solution.unplanned_ticket_ids.add(ticket.id)
+                self._debug(
+                    "ticket_left_unplanned_during_initial_build",
+                    iteration=iteration,
+                    ticket=self._debug_ticket_dict(ticket),
+                    reason="No feasible or cost-improving insertion was available for this planning day.",
+                )
                 continue
             solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, ticket.id)
+            self._debug(
+                "ticket_inserted_during_initial_build",
+                iteration=iteration,
+                ticket_id=ticket.id,
+                selected_technician_id=insertion.technician_id,
+                selected_position=insertion.position,
+                extra_travel_minutes=insertion.extra_travel_minutes,
+                extra_distance_km=insertion.extra_distance_km,
+                score_delta=insertion.score_delta,
+                routes=self._debug_solution_routes(solution),
+            )
 
         self._score(solution)
+        self._debug(
+            "initial_solution_build_finished",
+            iteration=iteration,
+            score_breakdown=self._score_breakdown(solution),
+            routes=self._debug_solution_routes(solution),
+        )
         return solution
 
     def _seed_routes(self, solution: PlanningSolution, remaining: list[TicketInput], *, iteration: int) -> None:
@@ -196,11 +283,20 @@ class InitialRouteOptimizer:
     def _improve(self, solution: PlanningSolution) -> PlanningSolution:
         best = solution.copy()
         self._score(best)
-        for _ in range(max(0, self.config.local_search_iterations)):
+        self._debug("local_search_started", initial_cost=best.score)
+        for local_iteration in range(max(0, self.config.local_search_iterations)):
             changed = False
             for candidate in self._move_candidates(best):
                 self._score(candidate)
                 if candidate.score < best.score:
+                    self._debug(
+                        "local_search_improvement",
+                        iteration=local_iteration + 1,
+                        operator="move",
+                        previous_cost=best.score,
+                        new_cost=candidate.score,
+                        score_breakdown=self._score_breakdown(candidate),
+                    )
                     best = candidate
                     changed = True
                     break
@@ -210,6 +306,14 @@ class InitialRouteOptimizer:
             for candidate in self._swap_candidates(best):
                 self._score(candidate)
                 if candidate.score < best.score:
+                    self._debug(
+                        "local_search_improvement",
+                        iteration=local_iteration + 1,
+                        operator="swap",
+                        previous_cost=best.score,
+                        new_cost=candidate.score,
+                        score_breakdown=self._score_breakdown(candidate),
+                    )
                     best = candidate
                     changed = True
                     break
@@ -219,11 +323,21 @@ class InitialRouteOptimizer:
             for candidate in self._two_opt_candidates(best):
                 self._score(candidate)
                 if candidate.score < best.score:
+                    self._debug(
+                        "local_search_improvement",
+                        iteration=local_iteration + 1,
+                        operator="two_opt",
+                        previous_cost=best.score,
+                        new_cost=candidate.score,
+                        score_breakdown=self._score_breakdown(candidate),
+                    )
                     best = candidate
                     changed = True
                     break
             if not changed:
+                self._debug("local_search_stopped_no_improvement", iteration=local_iteration + 1, best_cost=best.score)
                 break
+        self._debug("local_search_finished", final_cost=best.score)
         return best
 
     def _move_candidates(self, solution: PlanningSolution):
@@ -297,28 +411,78 @@ class InitialRouteOptimizer:
         *,
         technician_ids: list[int] | None = None,
         allow_low_priority: bool,
+        allow_non_improving: bool = False,
     ) -> Insertion | None:
         best: Insertion | None = None
         candidate_technician_ids = technician_ids or list(solution.routes)
+        self._debug(
+            "best_insertion_started",
+            ticket=self._debug_ticket_dict(ticket),
+            candidate_technician_ids=candidate_technician_ids,
+            allow_low_priority=allow_low_priority,
+            allow_non_improving=allow_non_improving,
+            current_routes=self._debug_solution_routes(solution),
+        )
         for technician_id in candidate_technician_ids:
             route = solution.routes[technician_id]
             if not self._can_do(route.technician, ticket):
+                self._debug(
+                    "insertion_candidate_rejected",
+                    ticket_id=ticket.id,
+                    technician_id=technician_id,
+                    reason="technician_missing_required_skills",
+                    missing_requirements=sorted(ticket.requirement_codes - route.technician.requirement_codes),
+                    technician_requirements=sorted(route.technician.requirement_codes),
+                )
                 continue
             for position in range(len(route.ticket_ids) + 1):
                 insertion = self._evaluate_insertion(solution, route, ticket, position)
                 if insertion is None:
                     continue
                 if ticket.is_low_priority and not allow_low_priority:
+                    self._debug(
+                        "insertion_candidate_rejected",
+                        ticket_id=ticket.id,
+                        technician_id=technician_id,
+                        position=position,
+                        reason="low_priority_not_allowed_in_this_search",
+                    )
                     continue
-                # Initial planning should assign every feasible open ticket within
-                # the configured multi-day horizon. Low-priority work used to be
-                # skipped when it added more than ``low_priority_max_extra_travel_minutes``
-                # of travel. That made sense for opportunistic same-day filler work,
-                # but it left normal/low tickets unplanned even when day 2 or day 3
-                # still had capacity. Hard feasibility below still protects
-                # workday, skill, lunch-break and daily non-urgent capacity rules.
+                # Hard feasibility protects workday, skill, lunch-break and
+                # daily non-urgent capacity rules. The score-delta check below
+                # decides whether the best feasible insertion is worth doing on
+                # this day or should be deferred to a later horizon day.
                 if best is None or insertion.score_delta < best.score_delta:
                     best = insertion
+
+        # For non-final horizon days, leaving a ticket off the active day means
+        # deferring it, not losing it. Only insert work when it improves the
+        # active day's own objective: heavy same-day travel cost versus the
+        # configured defer penalty. The final horizon day still has the large
+        # true-unplanned base penalty, so any feasible ticket remains strongly
+        # preferred there.
+        if (
+            best is not None
+            and not allow_non_improving
+            and not self.config.apply_unplanned_base_penalty
+            and best.score_delta >= 0
+        ):
+            self._debug(
+                "best_insertion_rejected_by_defer_policy",
+                ticket_id=ticket.id,
+                best_candidate=self._debug_insertion_dict(best),
+                reason=(
+                    "Best insertion did not beat the active-day defer penalty; "
+                    "ticket is deferred to a later horizon day instead."
+                ),
+            )
+            return None
+        self._debug(
+            "best_insertion_finished",
+            ticket_id=ticket.id,
+            selected_insertion=self._debug_insertion_dict(best) if best is not None else None,
+            reason="selected_lowest_score_delta_feasible_position" if best is not None else "no_feasible_position_found",
+        )
         return best
 
     def _effective_travel_penalty_per_minute(self) -> float:
@@ -347,7 +511,17 @@ class InitialRouteOptimizer:
         candidate = solution.copy()
         candidate_route = candidate.routes[route.technician.id]
         candidate_route.ticket_ids.insert(position, ticket.id)
-        if not self._is_solution_hard_feasible(candidate):
+        feasibility_reasons = self._hard_feasibility_reasons(candidate)
+        if feasibility_reasons:
+            self._debug(
+                "insertion_candidate_rejected",
+                ticket_id=ticket.id,
+                technician_id=route.technician.id,
+                position=position,
+                reason="hard_feasibility_failed",
+                feasibility_reasons=feasibility_reasons,
+                route_ticket_ids=candidate_route.ticket_ids,
+            )
             return None
 
         new_travel, new_distance = self._route_travel_and_distance(candidate_route)
@@ -369,9 +543,10 @@ class InitialRouteOptimizer:
         # attractive to get tickets off the board, while the urgency tie-breaker
         # is deliberately small so medium-vs-low priority does not swamp travel.
         travel_penalty = self._effective_travel_penalty_per_minute()
-        defer_penalty = max(0, self.config.defer_unplanned_penalty_minutes) * max(0, self.config.travel_penalty_per_minute)
+        defer_penalty = self._defer_unplanned_penalty_points()
+        unplanned_base_penalty = TICKET_COMPLETION_REWARD if self.config.apply_unplanned_base_penalty else 0
         priority_bonus = (
-            TICKET_COMPLETION_REWARD
+            unplanned_base_penalty
             + UNPLANNED_URGENCY_TIEBREAKER[ticket.urgency]
             + defer_penalty
         )
@@ -380,6 +555,34 @@ class InitialRouteOptimizer:
             + ticket.service_minutes
             + extra_route_work_overflow_penalty
             - priority_bonus
+        )
+        self._debug(
+            "insertion_candidate_evaluated",
+            ticket_id=ticket.id,
+            technician_id=route.technician.id,
+            position=position,
+            old_travel_minutes=old_travel,
+            new_travel_minutes=new_travel,
+            extra_travel_minutes=extra_travel,
+            old_distance_km=old_distance,
+            new_distance_km=new_distance,
+            extra_distance_km=extra_distance,
+            old_route_work_minutes=old_route_work,
+            new_route_work_minutes=new_route_work,
+            extra_route_work_overflow_penalty=extra_route_work_overflow_penalty,
+            travel_penalty_per_minute=self.config.travel_penalty_per_minute,
+            active_day_travel_multiplier=self.config.active_day_travel_penalty_multiplier,
+            effective_travel_penalty_per_minute=travel_penalty,
+            defer_penalty_points=defer_penalty,
+            unplanned_base_penalty_points=unplanned_base_penalty,
+            urgency_tiebreaker_points=UNPLANNED_URGENCY_TIEBREAKER[ticket.urgency],
+            priority_bonus_points=priority_bonus,
+            service_minutes_cost=ticket.service_minutes,
+            score_delta_formula=(
+                "extra_travel * effective_travel_penalty_per_minute "
+                "+ service_minutes + extra_route_work_overflow_penalty - priority_bonus"
+            ),
+            score_delta=score_delta,
         )
         return Insertion(
             technician_id=route.technician.id,
@@ -399,10 +602,23 @@ class InitialRouteOptimizer:
         )
 
     def _is_solution_hard_feasible(self, solution: PlanningSolution) -> bool:
+        return not self._hard_feasibility_reasons(solution)
+
+    def _hard_feasibility_reasons(self, solution: PlanningSolution) -> list[dict[str, Any]]:
+        reasons: list[dict[str, Any]] = []
         for route in solution.routes.values():
             timeline = self._route_timeline(route, include_return_home=True)
             if timeline is None:
-                return False
+                reasons.append(
+                    {
+                        "technician_id": route.technician.id,
+                        "technician_name": route.technician.name,
+                        "route_ticket_ids": route.ticket_ids,
+                        "reason": "timeline_could_not_be_built",
+                        "detail": "Usually caused by inability to place the mandatory lunch break inside the configured break window.",
+                    }
+                )
+                continue
 
             non_urgent_minutes = 0
             route_work_minutes = self._route_work_minutes(timeline)
@@ -416,12 +632,40 @@ class InitialRouteOptimizer:
             else:
                 route_end = planning_day_start(self.config, route.technician)
             if route_end > planning_day_end(self.config, route.technician):
-                return False
+                reasons.append(
+                    {
+                        "technician_id": route.technician.id,
+                        "technician_name": route.technician.name,
+                        "route_ticket_ids": route.ticket_ids,
+                        "reason": "route_ends_after_workday",
+                        "route_end": route_end.isoformat(),
+                        "workday_end": planning_day_end(self.config, route.technician).isoformat(),
+                        "overtime_minutes": int((route_end - planning_day_end(self.config, route.technician)).total_seconds() // 60),
+                    }
+                )
             if non_urgent_minutes > self.config.initial_non_urgent_minutes_per_technician:
-                return False
+                reasons.append(
+                    {
+                        "technician_id": route.technician.id,
+                        "technician_name": route.technician.name,
+                        "route_ticket_ids": route.ticket_ids,
+                        "reason": "non_urgent_minutes_cap_exceeded",
+                        "non_urgent_minutes": non_urgent_minutes,
+                        "cap_minutes": self.config.initial_non_urgent_minutes_per_technician,
+                    }
+                )
             if self._starts_ticket_after_latest_route_work_start(timeline):
-                return False
-        return True
+                reasons.append(
+                    {
+                        "technician_id": route.technician.id,
+                        "technician_name": route.technician.name,
+                        "route_ticket_ids": route.ticket_ids,
+                        "reason": "ticket_starts_after_latest_route_work_start",
+                        "route_work_minutes": route_work_minutes,
+                        "latest_ticket_start_route_work_minutes": self.config.latest_ticket_start_route_work_minutes,
+                    }
+                )
+        return reasons
 
     def _score(self, solution: PlanningSolution) -> None:
         total_travel = 0
@@ -463,12 +707,10 @@ class InitialRouteOptimizer:
                 overtime += int((route_end - day_end).total_seconds() // 60)
 
         solution.unplanned_ticket_ids = {ticket.id for ticket in self.tickets if ticket.id not in planned_ticket_ids}
-        defer_penalty = (
-            max(0, self.config.defer_unplanned_penalty_minutes)
-            * max(0, self.config.travel_penalty_per_minute)
-        )
+        defer_penalty = self._defer_unplanned_penalty_points()
+        unplanned_base_penalty = UNPLANNED_TICKET_PENALTY if self.config.apply_unplanned_base_penalty else 0
         unplanned_penalty = sum(
-            UNPLANNED_TICKET_PENALTY
+            unplanned_base_penalty
             + UNPLANNED_URGENCY_TIEBREAKER[self.ticket_by_id[ticket_id].urgency]
             + defer_penalty
             for ticket_id in solution.unplanned_ticket_ids
@@ -485,6 +727,229 @@ class InitialRouteOptimizer:
             + route_work_overflow_penalty
             + total_travel * self._effective_travel_penalty_per_minute()
         )
+
+    def _score_breakdown(self, solution: PlanningSolution) -> dict[str, Any]:
+        travel_penalty = self._effective_travel_penalty_per_minute()
+        defer_penalty = self._defer_unplanned_penalty_points()
+        unplanned_base_penalty = UNPLANNED_TICKET_PENALTY if self.config.apply_unplanned_base_penalty else 0
+        route_work_overflow_penalty = 0
+        route_breakdowns: list[dict[str, Any]] = []
+        for route in solution.routes.values():
+            timeline = self._route_timeline(route, include_return_home=True)
+            if timeline is None:
+                route_breakdowns.append(
+                    {
+                        "technician_id": route.technician.id,
+                        "technician_name": route.technician.name,
+                        "route_ticket_ids": route.ticket_ids,
+                        "timeline_feasible": False,
+                        "fallback_overtime_minutes": 24 * 60,
+                    }
+                )
+                continue
+            route_work = self._route_work_minutes(timeline)
+            route_overflow_penalty = self._route_work_overflow_penalty_points(route_work)
+            route_work_overflow_penalty += route_overflow_penalty
+            travel_items = [item for item in timeline if isinstance(item, PlannedTravel)]
+            stop_items = [item for item in timeline if isinstance(item, PlannedStop)]
+            route_breakdowns.append(
+                {
+                    "technician_id": route.technician.id,
+                    "technician_name": route.technician.name,
+                    "route_ticket_ids": route.ticket_ids,
+                    "timeline_feasible": True,
+                    "travel_minutes": sum(item.travel_minutes for item in travel_items),
+                    "travel_cost": sum(item.travel_minutes for item in travel_items) * travel_penalty,
+                    "distance_km": round(sum(item.distance_km for item in travel_items), 3),
+                    "service_minutes": sum(item.ticket.service_minutes for item in stop_items),
+                    "route_work_minutes": route_work,
+                    "route_work_overflow_penalty": route_overflow_penalty,
+                    "sla_miss_ticket_ids": [item.ticket.id for item in stop_items if item.planned_start_at > item.ticket.deadline_at],
+                    "timeline": self._debug_timeline(timeline),
+                }
+            )
+        unplanned_details = []
+        for ticket_id in sorted(solution.unplanned_ticket_ids):
+            ticket = self.ticket_by_id[ticket_id]
+            urgency_tiebreaker = UNPLANNED_URGENCY_TIEBREAKER[ticket.urgency]
+            unplanned_details.append(
+                {
+                    "ticket_id": ticket_id,
+                    "urgency": ticket.urgency.value,
+                    "unplanned_base_penalty": unplanned_base_penalty,
+                    "urgency_tiebreaker": urgency_tiebreaker,
+                    "defer_penalty": defer_penalty,
+                    "defer_penalty_formula": "defer_unplanned_penalty_minutes * effective_travel_penalty_per_minute",
+                    "ticket_unplanned_cost": unplanned_base_penalty + urgency_tiebreaker + defer_penalty,
+                }
+            )
+        travel_cost = solution.total_travel_minutes * travel_penalty
+        sla_cost = solution.sla_misses * SLA_MISS_PENALTY
+        overtime_cost = solution.overtime_minutes * OVERTIME_PENALTY_PER_MINUTE
+        unplanned_cost = sum(item["ticket_unplanned_cost"] for item in unplanned_details)
+        return {
+            "total_cost": solution.score,
+            "formula": "sla_cost + unplanned_cost + overtime_cost + route_work_overflow_penalty + travel_cost",
+            "travel_minutes": solution.total_travel_minutes,
+            "travel_penalty_per_minute": self.config.travel_penalty_per_minute,
+            "active_day_travel_multiplier": self.config.active_day_travel_penalty_multiplier,
+            "effective_travel_penalty_per_minute": travel_penalty,
+            "travel_cost": travel_cost,
+            "completed_tickets": solution.completed_tickets,
+            "unplanned_ticket_count": len(solution.unplanned_ticket_ids),
+            "unplanned_cost": unplanned_cost,
+            "unplanned_details": unplanned_details,
+            "sla_misses": solution.sla_misses,
+            "sla_miss_penalty_per_ticket": SLA_MISS_PENALTY,
+            "sla_cost": sla_cost,
+            "overtime_minutes": solution.overtime_minutes,
+            "overtime_penalty_per_minute": OVERTIME_PENALTY_PER_MINUTE,
+            "overtime_cost": overtime_cost,
+            "route_work_overflow_penalty": route_work_overflow_penalty,
+            "total_distance_km": round(solution.total_distance_km, 3),
+            "routes": route_breakdowns,
+        }
+
+    def _debug_solution_routes(self, solution: PlanningSolution) -> list[dict[str, Any]]:
+        routes: list[dict[str, Any]] = []
+        for route in solution.routes.values():
+            timeline = self._route_timeline(route, include_return_home=True)
+            routes.append(
+                {
+                    "technician_id": route.technician.id,
+                    "technician_name": route.technician.name,
+                    "ticket_ids": route.ticket_ids[:],
+                    "travel_minutes": (
+                        sum(item.travel_minutes for item in timeline if isinstance(item, PlannedTravel))
+                        if timeline is not None
+                        else None
+                    ),
+                    "route_work_minutes": self._route_work_minutes(timeline) if timeline is not None else None,
+                    "timeline_feasible": timeline is not None,
+                }
+            )
+        return routes
+
+    def _debug_timeline(
+        self,
+        timeline: list[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak],
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for item in timeline:
+            if isinstance(item, PlannedTravel):
+                items.append(
+                    {
+                        "type": "travel",
+                        "from_location_id": item.from_location_id,
+                        "to_location_id": item.to_location_id,
+                        "travel_minutes": item.travel_minutes,
+                        "travel_cost": item.travel_minutes * self._effective_travel_penalty_per_minute(),
+                        "distance_km": round(item.distance_km, 3),
+                        "planned_start_at": item.planned_start_at.isoformat(),
+                        "planned_end_at": item.planned_end_at.isoformat(),
+                        "before_ticket_id": item.before_ticket_id,
+                        "after_ticket_id": item.after_ticket_id,
+                    }
+                )
+            elif isinstance(item, PlannedStop):
+                items.append(
+                    {
+                        "type": "ticket",
+                        "ticket_id": item.ticket.id,
+                        "urgency": item.ticket.urgency.value,
+                        "service_minutes": item.ticket.service_minutes,
+                        "planned_start_at": item.planned_start_at.isoformat(),
+                        "planned_end_at": item.planned_end_at.isoformat(),
+                        "deadline_at": item.ticket.deadline_at.isoformat(),
+                        "sla_miss": item.planned_start_at > item.ticket.deadline_at,
+                        "travel_minutes_before": item.travel_minutes_before,
+                        "travel_cost_before": item.travel_minutes_before * self._effective_travel_penalty_per_minute(),
+                        "requires_hq_pickup": item.requires_hq_pickup,
+                        "travel_minutes_to_hq": item.travel_minutes_to_hq,
+                        "travel_minutes_hq_to_ticket": item.travel_minutes_hq_to_ticket,
+                    }
+                )
+            elif isinstance(item, PlannedRequirementPickup):
+                items.append(
+                    {
+                        "type": "requirement_pickup",
+                        "location_id": item.location_id,
+                        "requirement_codes": sorted(item.requirement_codes),
+                        "duration_minutes": item.duration_minutes,
+                        "planned_start_at": item.planned_start_at.isoformat(),
+                        "planned_end_at": item.planned_end_at.isoformat(),
+                    }
+                )
+            elif isinstance(item, PlannedBreak):
+                items.append(
+                    {
+                        "type": "break",
+                        "duration_minutes": item.duration_minutes,
+                        "planned_start_at": item.planned_start_at.isoformat(),
+                        "planned_end_at": item.planned_end_at.isoformat(),
+                    }
+                )
+        return items
+
+    def _debug_config_dict(self) -> dict[str, Any]:
+        return {
+            "branch_id": self.config.branch_id,
+            "planned_date": self.config.planned_date.isoformat(),
+            "initial_non_urgent_minutes_per_technician": self.config.initial_non_urgent_minutes_per_technician,
+            "initial_route_work_minutes_per_technician": self.config.initial_route_work_minutes_per_technician,
+            "latest_ticket_start_route_work_minutes": self.config.latest_ticket_start_route_work_minutes,
+            "travel_penalty_per_minute": self.config.travel_penalty_per_minute,
+            "today_travel_penalty_multiplier": self.config.today_travel_penalty_multiplier,
+            "active_day_travel_penalty_multiplier": self.config.active_day_travel_penalty_multiplier,
+            "effective_travel_penalty_per_minute": self._effective_travel_penalty_per_minute(),
+            "planning_horizon_days": self.config.planning_horizon_days,
+            "defer_unplanned_penalty_minutes": self.config.defer_unplanned_penalty_minutes,
+            "defer_unplanned_penalty_uses_effective_travel_penalty": True,
+            "defer_unplanned_penalty_points": self._defer_unplanned_penalty_points(),
+            "apply_unplanned_base_penalty": self.config.apply_unplanned_base_penalty,
+            "multi_start_iterations": self.config.multi_start_iterations,
+            "local_search_iterations": self.config.local_search_iterations,
+            "random_seed": self.config.random_seed,
+            "break_duration_minutes": self.config.break_duration_minutes,
+            "requirement_pickup_duration_minutes": self.config.requirement_pickup_duration_minutes,
+        }
+
+    def _debug_technician_dict(self, technician: TechnicianInput) -> dict[str, Any]:
+        return {
+            "id": technician.id,
+            "name": technician.name,
+            "start_location_id": technician.start_location_id,
+            "end_location_id": technician.end_location_id,
+            "workday_start_minutes": technician.workday_start_minutes,
+            "workday_end_minutes": technician.workday_end_minutes,
+            "requirement_codes": sorted(technician.requirement_codes),
+            "office_location_id": technician.office_location_id,
+        }
+
+    def _debug_ticket_dict(self, ticket: TicketInput) -> dict[str, Any]:
+        return {
+            "id": ticket.id,
+            "location_id": ticket.location_id,
+            "urgency": ticket.urgency.value,
+            "deadline_at": ticket.deadline_at.isoformat(),
+            "created_at": ticket.created_at.isoformat(),
+            "service_minutes": ticket.service_minutes,
+            "requirement_codes": sorted(ticket.requirement_codes),
+            "supply_requirement_codes": sorted(ticket.supply_requirement_codes),
+            "subject": ticket.subject,
+            "address": ticket.address,
+        }
+
+    def _debug_insertion_dict(self, insertion: Insertion | None) -> dict[str, Any] | None:
+        if insertion is None:
+            return None
+        return {
+            "technician_id": insertion.technician_id,
+            "position": insertion.position,
+            "extra_travel_minutes": insertion.extra_travel_minutes,
+            "extra_distance_km": insertion.extra_distance_km,
+            "score_delta": insertion.score_delta,
+        }
 
     def _route_timeline(
         self,
@@ -758,10 +1223,15 @@ class InitialRouteOptimizer:
     def _planning_class_rank(self, ticket: TicketInput) -> int:
         return 0 if ticket.urgency == TicketUrgency.URGENT else 1
 
-    def _strict_priority_key(self, ticket: TicketInput) -> tuple[int, int, datetime, int]:
+    def _defer_unplanned_penalty_points(self) -> int:
+        return int(
+            max(0, self.config.defer_unplanned_penalty_minutes)
+            * self._effective_travel_penalty_per_minute()
+        )
+
+    def _strict_priority_key(self, ticket: TicketInput) -> tuple[int, datetime, int]:
         return (
             self._planning_class_rank(ticket),
-            -(len(ticket.requirement_codes) + len(ticket.supply_requirement_codes)),
             ticket.created_at,
             ticket.id,
         )

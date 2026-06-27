@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 import logging
 from datetime import date, datetime, time, timedelta
+import json
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
@@ -51,14 +53,34 @@ from riool_service.services.planning_ai.selection import load_available_technici
 logger = logging.getLogger(__name__)
 
 SUPPLY_REQUIREMENT_CODES = {"SUPPLIES"}
+PLANNING_DEBUG_LOG_DIR = Path("logs/planning_runs")
 
 
 class PlanningAiError(ValueError):
     pass
 
 
+class ActivePlanningRunError(PlanningAiError):
+    pass
+
+
 def ensure_planning_ai_tables() -> None:
     create_schema(get_engine())
+
+
+def _planning_debug_log_path(planning_run_id: int) -> Path:
+    return PLANNING_DEBUG_LOG_DIR / f"planning_run_{planning_run_id}.jsonl"
+
+
+def _append_planning_debug_log(path: Path, message: str, **fields: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestamp": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+        "message": message,
+        **fields,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
 
 
 
@@ -68,6 +90,76 @@ VISIBLE_ASSIGNMENT_STATUSES = {
     PlanningAssignmentStatus.PLANNED,
     PlanningAssignmentStatus.IN_PROGRESS,
 }
+ACTIVE_PLANNING_RUN_STATUSES = {PlanningRunStatus.PENDING, PlanningRunStatus.RUNNING}
+
+
+def _planning_run_to_status_dict(planning_run: PlanningRun | None) -> dict[str, Any] | None:
+    if planning_run is None:
+        return None
+    return {
+        "id": planning_run.id,
+        "branch_id": planning_run.branch_id,
+        "status": _value(planning_run.status),
+        "trigger_type": _value(planning_run.trigger_type),
+        "planned_date": planning_run.planned_date.isoformat() if planning_run.planned_date else None,
+        "started_at": planning_run.started_at.isoformat() if planning_run.started_at else None,
+        "completed_at": planning_run.completed_at.isoformat() if planning_run.completed_at else None,
+        "error_message": planning_run.error_message,
+    }
+
+
+def _active_planning_run(session: Session, branch_id: int) -> PlanningRun | None:
+    return session.scalar(
+        select(PlanningRun)
+        .where(PlanningRun.branch_id == branch_id, PlanningRun.status.in_(list(ACTIVE_PLANNING_RUN_STATUSES)))
+        .order_by(PlanningRun.started_at.desc().nullslast(), PlanningRun.id.desc())
+        .limit(1)
+    )
+
+
+def _create_visible_planning_run(
+    session: Session,
+    *,
+    branch_id: int,
+    trigger_type: PlanningRunTrigger,
+    planned_date: datetime,
+    notes: str,
+) -> PlanningRun:
+    active_run = _active_planning_run(session, branch_id)
+    if active_run is not None:
+        raise ActivePlanningRunError(
+            f"Planning run {active_run.id} is already {_value(active_run.status).lower()} for branch {branch_id}."
+        )
+    planning_run = PlanningRun(
+        branch_id=branch_id,
+        trigger_type=trigger_type,
+        status=PlanningRunStatus.RUNNING,
+        planned_date=planned_date,
+        started_at=datetime.utcnow(),
+        notes=notes,
+    )
+    session.add(planning_run)
+    session.commit()
+    session.refresh(planning_run)
+    return planning_run
+
+
+def _mark_planning_run_failed(session: Session, planning_run: PlanningRun | None, exc: BaseException) -> None:
+    if planning_run is None:
+        return
+    planning_run_id = planning_run.id
+    try:
+        session.rollback()
+        persisted_run = session.get(PlanningRun, planning_run_id)
+        if persisted_run is None:
+            return
+        persisted_run.status = PlanningRunStatus.FAILED
+        persisted_run.completed_at = datetime.utcnow()
+        persisted_run.error_message = str(exc)[:2000]
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("Failed to mark planning_run_id=%s as FAILED", planning_run_id)
 
 
 def get_planning_overview(session: Session, *, branch_id: int | None = None, planned_date: str | date | datetime | None = None) -> dict[str, Any]:
@@ -79,6 +171,7 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None, pla
     planned-but-not-finished tickets are no longer counted as open here.
     """
     branch = _overview_branch(session, branch_id)
+    active_run = _active_planning_run(session, branch.id)
     latest_run = _latest_completed_planning_run(session, branch.id)
     technicians = _overview_technicians(session, branch.id)
     all_assignments = _overview_assignments(session, latest_run.id if latest_run else None)
@@ -135,12 +228,27 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None, pla
     )
     if latest_run is not None:
         used_minutes += len(technicians) * 45
-    travel_minutes = sum(int(assignment.estimated_travel_minutes_before or 0) for assignment in assignments)
-    kilometers = round(sum(float(assignment.estimated_distance_km_before or 0) for assignment in assignments), 1)
+    return_travel_minutes, return_distance_km = _return_travel_from_assignments(
+        technicians, assignments_by_technician, route_lookup
+    )
+    used_minutes += return_travel_minutes
+    travel_minutes = (
+        sum(int(assignment.estimated_travel_minutes_before or 0) for assignment in assignments)
+        + return_travel_minutes
+    )
+    kilometers = round(
+        sum(float(assignment.estimated_distance_km_before or 0) for assignment in assignments)
+        + return_distance_km,
+        1,
+    )
 
     return {
         "has_plan": latest_run is not None,
         "planning_run_id": latest_run.id if latest_run else None,
+        "planning_status": _value(active_run.status) if active_run else (_value(latest_run.status) if latest_run else None),
+        "is_planning_running": active_run is not None,
+        "active_planning_run": _planning_run_to_status_dict(active_run),
+        "latest_completed_planning_run": _planning_run_to_status_dict(latest_run),
         "planned_date": selected_day.isoformat() if selected_day else (latest_run.planned_date.isoformat() if latest_run and latest_run.planned_date else None),
         "available_dates": [value.isoformat() for value in available_dates],
         "stats": {
@@ -685,10 +793,23 @@ def _original_today_assignment_map(assignments: list[PlanningAssignment], base_d
 
 
 def _day_config(config: PlanningConfig, day_index: int) -> PlanningConfig:
+    horizon_days = max(1, config.planning_horizon_days)
+    if day_index == 0:
+        defer_unplanned_penalty_minutes = config.defer_to_day_2_penalty_minutes
+    elif day_index == 1:
+        defer_unplanned_penalty_minutes = config.defer_to_day_3_penalty_minutes
+    else:
+        defer_unplanned_penalty_minutes = 0
+
     return replace(
         config,
         planned_date=config.planned_date + timedelta(days=day_index),
         random_seed=(config.random_seed + day_index if isinstance(config.random_seed, int) else config.random_seed),
+        defer_unplanned_penalty_minutes=defer_unplanned_penalty_minutes,
+        active_day_travel_penalty_multiplier=(
+            max(0.0, config.today_travel_penalty_multiplier) if day_index == 0 else 1.0
+        ),
+        apply_unplanned_base_penalty=(day_index >= horizon_days - 1),
     )
 
 
@@ -739,7 +860,7 @@ def _incremental_direct_candidate(
         day_results[day_index] = (optimizer, solution)
 
     optimizer, solution = day_results[target_day_index]
-    insertion = optimizer._best_insertion(solution, new_ticket, allow_low_priority=True)  # noqa: SLF001
+    insertion = optimizer._best_insertion(solution, new_ticket, allow_low_priority=True, allow_non_improving=True)  # noqa: SLF001
     if insertion is None:
         return None
     solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, new_ticket.id)
@@ -901,7 +1022,7 @@ def _place_moved_tickets_greedily(
                 routes_for_day=routes_for_day,
                 extra_ticket_ids={moved_ticket_id},
             )
-            insertion = optimizer._best_insertion(solution, moved_ticket, allow_low_priority=True)  # noqa: SLF001
+            insertion = optimizer._best_insertion(solution, moved_ticket, allow_low_priority=True, allow_non_improving=True)  # noqa: SLF001
             if insertion is None:
                 continue
             solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, moved_ticket_id)
@@ -1068,7 +1189,13 @@ def run_replanning(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     Existing assignments are kept for history, but no longer appear as active on
     tickets once the new plan is generated.
     """
-    _move_existing_active_assignments(session, int(payload.get("branch_id") or 1))
+    branch_id = int(payload.get("branch_id") or 1)
+    if _active_planning_run(session, branch_id) is not None:
+        active_run = _active_planning_run(session, branch_id)
+        raise ActivePlanningRunError(
+            f"Planning run {active_run.id} is already {_value(active_run.status).lower()} for branch {branch_id}."
+        )
+    _move_existing_active_assignments(session, branch_id)
     result = run_initial_planning(session, payload)
     result["overview"] = get_planning_overview(session, branch_id=int(payload.get("branch_id") or 1))
     return result
@@ -1156,6 +1283,9 @@ def _route_cache_lookup(
                 pairs.add((previous_location_id, hq_location_id))
                 pairs.add((hq_location_id, ticket_location_id))
             previous_location_id = ticket_location_id
+        end_location_id = technician.end_location.id if technician.end_location is not None else None
+        if previous_location_id is not None and end_location_id is not None:
+            pairs.add((previous_location_id, end_location_id))
 
     if not pairs:
         return {}
@@ -1175,6 +1305,32 @@ def _route_cache_lookup(
         for row in rows
     }
     return {pair: lookup[pair] for pair in pairs if pair in lookup}
+
+
+def _return_travel_from_assignments(
+    technicians: list[Technician],
+    assignments_by_technician: dict[int, list[PlanningAssignment]],
+    route_lookup: dict[tuple[int, int], tuple[int, float]],
+) -> tuple[int, float]:
+    travel_minutes = 0
+    distance_km = 0.0
+    for technician in technicians:
+        assignments = assignments_by_technician.get(technician.id, [])
+        if not assignments:
+            continue
+        last_assignment = assignments[-1]
+        from_location_id = last_assignment.ticket.location_id
+        end_location = technician.end_location
+        to_location_id = end_location.id if end_location is not None else None
+        if from_location_id is None or to_location_id is None:
+            continue
+        leg = route_lookup.get((from_location_id, to_location_id))
+        if leg is None:
+            continue
+        minutes, distance = leg
+        travel_minutes += int(minutes)
+        distance_km += float(distance)
+    return travel_minutes, distance_km
 
 
 def _format_location_address(location: Location | None) -> str:
@@ -1423,6 +1579,40 @@ def _assignments_to_timeline_items_for_single_day(
         previous_end = assignment.planned_end_at
         previous_location_id = assignment.ticket.location_id
 
+    if assignments and planned_date is not None:
+        end_location = technician.end_location
+        end_location_id = end_location.id if end_location is not None else None
+        if previous_location_id is not None and end_location_id is not None:
+            return_leg = (route_lookup or {}).get((previous_location_id, end_location_id))
+            if return_leg is not None:
+                return_minutes, return_distance = return_leg
+                return_start = previous_end
+                return_end = return_start + timedelta(minutes=return_minutes)
+                if not break_inserted:
+                    break_item = _break_item_between(
+                        technician.id,
+                        previous_end,
+                        return_start,
+                        planned_date=planned_date,
+                    )
+                    if break_item is not None:
+                        items.append(break_item)
+                        break_inserted = True
+                if return_minutes > 0:
+                    items.append(
+                        _travel_item(
+                            f"travel-return-home-{technician.id}-{planned_date.strftime('%Y%m%d')}",
+                            return_start,
+                            return_end,
+                            return_minutes,
+                            return_distance,
+                            from_location_id=previous_location_id,
+                            to_location_id=end_location_id,
+                        )
+                    )
+                previous_end = return_end
+                previous_location_id = end_location_id
+
     if not break_inserted:
         route_end = _technician_day_end(technician, planned_date)
         break_item = _break_item_between(
@@ -1635,77 +1825,107 @@ def create_initial_planning_proposal(session: Session, payload: dict[str, Any]) 
 
 def run_initial_planning(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     config = _config_from_payload(payload)
-    technicians = load_available_technicians(session, config)
-    tickets = load_candidate_tickets(session, config, technicians)
-    matrix = get_planning_route_matrix(
-        session,
-        technicians,
-        tickets,
-        refresh_cache=config.refresh_route_cache,
-    )
-    day_plans = _build_horizon_plan(config, technicians, tickets, matrix)
+    planning_run: PlanningRun | None = None
+    try:
+        planning_run = _create_visible_planning_run(
+            session,
+            branch_id=config.branch_id,
+            trigger_type=PlanningRunTrigger.DAILY_START,
+            planned_date=config.planned_date,
+            notes=(
+                "Initial planning generated for a multi-day horizon by multi-start "
+                "randomized cheapest insertion + local search."
+            ),
+        )
+        debug_log_path = _planning_debug_log_path(planning_run.id)
+        _append_planning_debug_log(
+            debug_log_path,
+            "planning_run_debug_log_started",
+            planning_run_id=planning_run.id,
+            branch_id=config.branch_id,
+            planned_date=config.planned_date.isoformat(),
+            file_format="json_lines",
+            description=(
+                "Verbose planner diagnostics. Each line is one JSON object showing why "
+                "candidate plans and insertions were accepted, rejected, or selected."
+            ),
+        )
+        technicians = load_available_technicians(session, config)
+        tickets = load_candidate_tickets(session, config, technicians)
+        matrix = get_planning_route_matrix(
+            session,
+            technicians,
+            tickets,
+            refresh_cache=config.refresh_route_cache,
+        )
+        day_plans = _build_horizon_plan(
+            config,
+            technicians,
+            tickets,
+            matrix,
+            planning_run_id=planning_run.id,
+            debug_log_path=debug_log_path,
+        )
 
-    planning_run = PlanningRun(
-        branch_id=config.branch_id,
-        trigger_type=PlanningRunTrigger.DAILY_START,
-        status=PlanningRunStatus.RUNNING,
-        planned_date=config.planned_date,
-        started_at=datetime.utcnow(),
-        notes=(
-            "Initial planning generated for a multi-day horizon by multi-start "
-            "randomized cheapest insertion + local search."
-        ),
-    )
-    session.add(planning_run)
-    session.flush()
+        planned_ticket_ids: list[int] = []
+        sequence_by_technician: dict[int, int] = {technician.id: 1 for technician in technicians}
+        for day_plan in day_plans:
+            optimizer: InitialRouteOptimizer = day_plan["optimizer"]
+            solution: PlanningSolution = day_plan["solution"]
+            for technician_id, route in solution.routes.items():
+                stops = optimizer.build_stops(solution, technician_id)
+                for stop in stops:
+                    assignment = PlanningAssignment(
+                        planning_run_id=planning_run.id,
+                        branch_id=config.branch_id,
+                        technician_id=technician_id,
+                        ticket_id=stop.ticket.id,
+                        sequence_order=sequence_by_technician[technician_id],
+                        planned_start_at=stop.planned_start_at,
+                        planned_end_at=stop.planned_end_at,
+                        estimated_duration_minutes=stop.ticket.service_minutes,
+                        estimated_travel_minutes_before=stop.travel_minutes_before,
+                        estimated_distance_km_before=stop.distance_km_before,
+                        requires_hq_pickup=stop.requires_hq_pickup,
+                        hq_location_id=stop.hq_location_id,
+                        estimated_travel_minutes_to_hq=stop.travel_minutes_to_hq,
+                        estimated_distance_km_to_hq=stop.distance_km_to_hq,
+                        estimated_travel_minutes_hq_to_ticket=stop.travel_minutes_hq_to_ticket,
+                        estimated_distance_km_hq_to_ticket=stop.distance_km_hq_to_ticket,
+                        status=PlanningAssignmentStatus.PLANNED,
+                        source=PlanningAssignmentSource.AI,
+                    )
+                    session.add(assignment)
+                    planned_ticket_ids.append(stop.ticket.id)
+                    sequence_by_technician[technician_id] += 1
 
-    planned_ticket_ids: list[int] = []
-    sequence_by_technician: dict[int, int] = {technician.id: 1 for technician in technicians}
-    for day_plan in day_plans:
-        optimizer: InitialRouteOptimizer = day_plan["optimizer"]
-        solution: PlanningSolution = day_plan["solution"]
-        for technician_id, route in solution.routes.items():
-            stops = optimizer.build_stops(solution, technician_id)
-            for stop in stops:
-                assignment = PlanningAssignment(
-                    planning_run_id=planning_run.id,
-                    branch_id=config.branch_id,
-                    technician_id=technician_id,
-                    ticket_id=stop.ticket.id,
-                    sequence_order=sequence_by_technician[technician_id],
-                    planned_start_at=stop.planned_start_at,
-                    planned_end_at=stop.planned_end_at,
-                    estimated_duration_minutes=stop.ticket.service_minutes,
-                    estimated_travel_minutes_before=stop.travel_minutes_before,
-                    estimated_distance_km_before=stop.distance_km_before,
-                    requires_hq_pickup=stop.requires_hq_pickup,
-                    hq_location_id=stop.hq_location_id,
-                    estimated_travel_minutes_to_hq=stop.travel_minutes_to_hq,
-                    estimated_distance_km_to_hq=stop.distance_km_to_hq,
-                    estimated_travel_minutes_hq_to_ticket=stop.travel_minutes_hq_to_ticket,
-                    estimated_distance_km_hq_to_ticket=stop.distance_km_hq_to_ticket,
-                    status=PlanningAssignmentStatus.PLANNED,
-                    source=PlanningAssignmentSource.AI,
-                )
-                session.add(assignment)
-                planned_ticket_ids.append(stop.ticket.id)
-                sequence_by_technician[technician_id] += 1
+        if planned_ticket_ids:
+            for ticket in session.query(Ticket).filter(Ticket.id.in_(planned_ticket_ids)).all():
+                ticket.status = TicketStatus.PLANNED
 
-    if planned_ticket_ids:
-        for ticket in session.query(Ticket).filter(Ticket.id.in_(planned_ticket_ids)).all():
-            ticket.status = TicketStatus.PLANNED
+        summary = _horizon_summary(day_plans, tickets)
+        planning_run.status = PlanningRunStatus.COMPLETED
+        planning_run.completed_at = datetime.utcnow()
+        planning_run.score_total_distance_km = round(summary["total_distance_km"], 3)
+        planning_run.score_total_travel_minutes = int(summary["total_travel_minutes"])
+        planning_run.score_completed_tickets = int(summary["completed_tickets"])
+        planning_run.score_unplanned_tickets = int(summary["unplanned_tickets"])
+        _append_planning_debug_log(
+            debug_log_path,
+            "planning_run_debug_log_finished",
+            planning_run_id=planning_run.id,
+            status=_value(planning_run.status),
+            summary=summary,
+        )
 
-    summary = _horizon_summary(day_plans, tickets)
-    planning_run.status = PlanningRunStatus.COMPLETED
-    planning_run.completed_at = datetime.utcnow()
-    planning_run.score_total_distance_km = round(summary["total_distance_km"], 3)
-    planning_run.score_total_travel_minutes = int(summary["total_travel_minutes"])
-    planning_run.score_completed_tickets = int(summary["completed_tickets"])
-    planning_run.score_unplanned_tickets = int(summary["unplanned_tickets"])
-
-    result = _horizon_solution_as_dict(config, day_plans)
-    result["planning_run_id"] = planning_run.id
-    return result
+        result = _horizon_solution_as_dict(config, day_plans)
+        result["planning_run_id"] = planning_run.id
+        result["planning_run_status"] = _value(planning_run.status)
+        result["debug_log_path"] = str(debug_log_path)
+        return result
+    except Exception as exc:
+        _mark_planning_run_failed(session, planning_run, exc)
+        raise
 
 
 def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
@@ -1769,6 +1989,9 @@ def _build_horizon_plan(
     technicians: list[Any],
     tickets: list[Any],
     matrix: Any,
+    *,
+    planning_run_id: int | None = None,
+    debug_log_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Plan all candidate tickets across the configured number of days.
 
@@ -1784,27 +2007,29 @@ def _build_horizon_plan(
     for day_index in range(max(1, config.planning_horizon_days)):
         if not remaining_by_id and day_index > 0:
             break
-        if day_index == 0:
-            defer_unplanned_penalty_minutes = config.defer_to_day_2_penalty_minutes
-        elif day_index == 1:
-            defer_unplanned_penalty_minutes = config.defer_to_day_3_penalty_minutes
-        else:
-            defer_unplanned_penalty_minutes = 0
 
-        day_config = replace(
-            config,
-            planned_date=config.planned_date + timedelta(days=day_index),
-            random_seed=(config.random_seed + day_index if isinstance(config.random_seed, int) else config.random_seed),
-            defer_unplanned_penalty_minutes=defer_unplanned_penalty_minutes,
-            active_day_travel_penalty_multiplier=(
-                max(0.0, config.today_travel_penalty_multiplier) if day_index == 0 else 1.0
-            ),
-        )
+        day_config = _day_config(config, day_index)
+        if debug_log_path is not None:
+            _append_planning_debug_log(
+                debug_log_path,
+                "planning_day_started",
+                planning_run_id=planning_run_id,
+                day_index=day_index,
+                planning_date=day_config.planned_date.date().isoformat(),
+                remaining_ticket_count=len(remaining_by_id),
+                travel_penalty_per_minute=day_config.travel_penalty_per_minute,
+                active_day_travel_multiplier=day_config.active_day_travel_penalty_multiplier,
+                effective_travel_penalty_per_minute=(
+                    max(0, day_config.travel_penalty_per_minute)
+                    * max(0.0, day_config.active_day_travel_penalty_multiplier)
+                ),
+                defer_unplanned_penalty_minutes=day_config.defer_unplanned_penalty_minutes,
+                apply_unplanned_base_penalty=day_config.apply_unplanned_base_penalty,
+            )
         remaining_tickets = sorted(
             remaining_by_id.values(),
             key=lambda ticket: (
                 ticket.urgency_rank,
-                -len(ticket.requirement_codes),
                 ticket.created_at,
                 ticket.id,
             ),
@@ -1814,6 +2039,11 @@ def _build_horizon_plan(
             technicians=technicians,
             tickets=remaining_tickets,
             matrix=matrix,
+            debug_log_path=debug_log_path,
+            debug_label=(
+                f"planning_run_id={planning_run_id} day_index={day_index} "
+                f"date={day_config.planned_date.date().isoformat()}"
+            ),
         )
         solution = optimizer.optimize()
         planned_ids = {
@@ -1832,6 +2062,21 @@ def _build_horizon_plan(
                 "planned_ticket_ids": planned_ids,
             }
         )
+        if debug_log_path is not None:
+            _append_planning_debug_log(
+                debug_log_path,
+                "planning_day_finished",
+                planning_run_id=planning_run_id,
+                day_index=day_index,
+                planning_date=day_config.planned_date.date().isoformat(),
+                total_cost_for_selected_day_planning=solution.score,
+                planned_ticket_ids=sorted(planned_ids),
+                remaining_ticket_ids=sorted(remaining_by_id),
+                total_travel_minutes=solution.total_travel_minutes,
+                total_distance_km=round(solution.total_distance_km, 3),
+                completed_tickets=solution.completed_tickets,
+                unplanned_ticket_ids=sorted(solution.unplanned_ticket_ids),
+            )
 
 
     return day_plans
@@ -2021,7 +2266,7 @@ def _solution_as_dict(
             "defer_unplanned_penalty_minutes": config.defer_unplanned_penalty_minutes,
             "penalty_weights": {
                 "sla_miss": SLA_MISS_PENALTY,
-                "unplanned_base_per_ticket": UNPLANNED_TICKET_PENALTY,
+                "unplanned_base_per_ticket": (UNPLANNED_TICKET_PENALTY if config.apply_unplanned_base_penalty else 0),
                 "unplanned_urgent_tiebreaker": UNPLANNED_URGENCY_TIEBREAKER[TicketUrgency.URGENT],
                 "unplanned_medium_tiebreaker": UNPLANNED_URGENCY_TIEBREAKER[TicketUrgency.MEDIUM],
                 "unplanned_low_tiebreaker": UNPLANNED_URGENCY_TIEBREAKER[TicketUrgency.LOW],
@@ -2034,12 +2279,13 @@ def _solution_as_dict(
                 "defer_unplanned_per_ticket": (
                     config.defer_unplanned_penalty_minutes * config.travel_penalty_per_minute
                 ),
+                "apply_unplanned_base_penalty": config.apply_unplanned_base_penalty,
             },
         },
         "design_choices": [
             "Multiple randomized start plans are tried to avoid all nearby-home mechanics staying in the same area.",
             "Each start plan is improved with move, swap and reorder operations.",
-            "All feasible tickets in the 3-day horizon are added; low priority is not treated as optional filler work.",
+            "Non-final horizon days score leftovers as deferred work; only the final horizon day applies the true unplanned-ticket base penalty.",
             "Every mechanic gets a 45 minute break planned inside the 11:00-13:00 window.",
             "A route with one or more supply requirements gets one HQ pickup before the first supply ticket.",
             "Travel and break blocks are returned as explicit timeline items, instead of appearing as gaps between tickets.",

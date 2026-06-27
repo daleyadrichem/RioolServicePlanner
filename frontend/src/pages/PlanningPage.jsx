@@ -255,7 +255,9 @@ export function PlanningPage() {
   const activeDateIndex = availableDates.indexOf(activeDate);
   const canGoPrevious = activeDateIndex > 0;
   const canGoNext = activeDateIndex >= 0 && activeDateIndex < availableDates.length - 1;
-  const planButtonDisabled = planningActionLoading || loading;
+  const backendPlanningRunning = Boolean(planning.is_planning_running);
+  const runningPlanningRun = planning.active_planning_run;
+  const planButtonDisabled = planningActionLoading || loading || backendPlanningRunning;
 
   const selectRelativeDay = (offset) => {
     if (activeDateIndex >= 0) {
@@ -272,13 +274,22 @@ export function PlanningPage() {
       <PageHeader title="Planning Overzicht">
         <div className="actions">
           <Button primary disabled={planButtonDisabled} onClick={() => runAction(hasPlan ? api.replan : api.autoPlan)}>
-            {planningActionLoading ? <Loader2 className="spin" size={20} /> : hasPlan ? <RotateCw size={20} /> : <Clock size={20} />}
-            {planningActionLoading ? 'Planning maken...' : hasPlan ? 'Herplannen' : 'Start planning'}
+            {(planningActionLoading || backendPlanningRunning) ? <Loader2 className="spin" size={20} /> : hasPlan ? <RotateCw size={20} /> : <Clock size={20} />}
+            {planningActionLoading || backendPlanningRunning
+              ? `Planning draait${runningPlanningRun?.id ? ` (#${runningPlanningRun.id})` : ''}...`
+              : hasPlan ? 'Herplannen' : 'Start planning'}
           </Button>
         </div>
       </PageHeader>
 
       <ApiNotice loading={loading} error={error} />
+
+      {backendPlanningRunning && (
+        <div className="apiNotice loading">
+          <Loader2 className="spin" size={16} />
+          Er draait al een planning{runningPlanningRun?.id ? ` (#${runningPlanningRun.id})` : ''}. De knop is uitgeschakeld tot de backend klaar is.
+        </div>
+      )}
 
       {hasPlan && (
         <section className="planningDateSelector" aria-label="Planning dag kiezen">

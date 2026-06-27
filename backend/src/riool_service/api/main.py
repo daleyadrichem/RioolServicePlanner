@@ -265,6 +265,8 @@ def auto_plan(session: SessionDep, payload: InitialPlanningPayload | None = Body
         session.commit()
         result["overview"] = planning_ai_service.get_planning_overview(session, branch_id=data.get("branch_id"))
         return result
+    except planning_ai_service.ActivePlanningRunError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -276,6 +278,8 @@ def replan(session: SessionDep, payload: InitialPlanningPayload | None = Body(de
         result = planning_ai_service.run_replanning(session, data)
         session.commit()
         return result
+    except planning_ai_service.ActivePlanningRunError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -296,6 +300,8 @@ def run_initial_planning(payload: InitialPlanningPayload, session: SessionDep) -
         result = planning_ai_service.run_initial_planning(session, payload.as_service_payload())
         session.commit()
         return result
+    except planning_ai_service.ActivePlanningRunError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

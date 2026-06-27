@@ -141,13 +141,12 @@ def _datetime_at_minutes(anchor: datetime, minutes_after_midnight: int) -> datet
     )
 
 
-def _candidate_sort_key(ticket: TicketInput) -> tuple[int, int, datetime, int]:
-    # Urgent tickets are protected first. Medium and low share the same rank;
-    # more constrained tickets are inserted earlier so they are not boxed out by
-    # flexible work. Deadlines are not used as a hidden ordering rule.
+def _candidate_sort_key(ticket: TicketInput) -> tuple[int, datetime, int]:
+    # Urgent tickets are protected first. Medium and low share the same rank.
+    # Requirements and supply/HQ needs are intentionally not used for ordering;
+    # the optimizer should decide based on route cost instead of preferring HQ work.
     return (
         ticket.urgency_rank,
-        -(len(ticket.requirement_codes) + len(ticket.supply_requirement_codes)),
         ticket.created_at,
         ticket.id,
     )
