@@ -63,7 +63,12 @@ export const api = {
   },
   autoPlan: () => request('/planning/auto-plan', { method: 'POST' }),
   replan: () => request('/planning/replan', { method: 'POST' }),
-  operationalReplan: (plannedDate) => request('/planning/operational-replan', { method: 'POST', body: JSON.stringify(plannedDate ? { planned_date: plannedDate } : {}) }),
+  operationalReplan: (plannedDate, activeTechnicianIds) => {
+    const body = {};
+    if (plannedDate) body.planned_date = plannedDate;
+    if (Array.isArray(activeTechnicianIds)) body.active_technician_ids = activeTechnicianIds;
+    return request('/planning/operational-replan', { method: 'POST', body: JSON.stringify(body) });
+  },
   getSimulatorState: () => request('/simulator/state'),
   getSimulatorStatistics: () => request('/simulator/statistics'),
   getTechnicianSimulatorStates: () => request('/simulator/technicians'),

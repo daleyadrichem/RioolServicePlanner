@@ -1501,6 +1501,7 @@ def _operational_daytime_assignments(assignments: list[PlanningAssignment], base
 def _preserved_operational_replan_assignments(
     assignments: list[PlanningAssignment],
     config: PlanningConfig,
+    unavailable_technician_ids: set[int] | None = None,
 ) -> list[PlanningAssignment]:
     """Assignments copied into the new run but excluded from optimization.
 
@@ -1520,13 +1521,16 @@ def _preserved_operational_replan_assignments(
             continue
         planned_day = assignment.planned_start_at.date()
         in_horizon = base_day <= planned_day < horizon_end
-        should_preserve = (
+        operationally_fixed = (
             assignment.planned_start_at.date() == base_day
             and _assignment_has_started_or_is_immutable_operationally(assignment)
-        ) or (
-            in_horizon
-            and assignment.locked_by_planner
         )
+        planner_locked = in_horizon and assignment.locked_by_planner
+        technician_unavailable = bool(
+            unavailable_technician_ids is not None
+            and assignment.technician_id in unavailable_technician_ids
+        )
+        should_preserve = operationally_fixed or (planner_locked and not technician_unavailable)
         if not should_preserve:
             continue
         if assignment.id in seen_assignment_ids:
@@ -1789,6 +1793,30 @@ def _copy_assignment_for_new_run(
     )
 
 
+def _active_technician_ids_from_payload(payload: dict[str, Any]) -> set[int] | None:
+    raw_ids = payload.get("active_technician_ids")
+    if raw_ids is None:
+        return None
+    if not isinstance(raw_ids, list):
+        raise PlanningAiError("active_technician_ids must be a list of technician IDs")
+    ids = {int(value) for value in raw_ids if value is not None}
+    if not ids:
+        raise PlanningAiError("Select at least one technician for replanning")
+    return ids
+
+
+def _filter_active_replan_technicians(technicians: list[Any], active_technician_ids: set[int] | None) -> list[Any]:
+    if active_technician_ids is None:
+        return technicians
+    selected = [technician for technician in technicians if int(technician.id) in active_technician_ids]
+    if not selected:
+        available_ids = ", ".join(str(technician.id) for technician in technicians) or "none"
+        raise PlanningAiError(
+            f"None of the selected technicians are available for this branch. Available technician IDs: {available_ids}"
+        )
+    return selected
+
+
 def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     """Replan the active day around fixed, already-started work.
 
@@ -1809,9 +1837,20 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
 
     base_assignments = _replanning_base_assignments(session, latest_run.id)
     base_date = config.planned_date.date()
+    active_technician_ids = _active_technician_ids_from_payload(payload)
+    all_technicians = load_available_technicians(session, config)
+    unavailable_technician_ids = (
+        {int(technician.id) for technician in all_technicians} - active_technician_ids
+        if active_technician_ids is not None
+        else None
+    )
+    technicians = _filter_active_replan_technicians(all_technicians, active_technician_ids)
     operational_fixed_assignments = _operational_daytime_assignments(base_assignments, base_date)
-    preserved_assignments = _preserved_operational_replan_assignments(base_assignments, config)
-    technicians = load_available_technicians(session, config)
+    preserved_assignments = _preserved_operational_replan_assignments(
+        base_assignments,
+        config,
+        unavailable_technician_ids=unavailable_technician_ids,
+    )
 
     planning_run: PlanningRun | None = None
     try:
@@ -1844,7 +1883,11 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
                 "multi_start_iterations": config.multi_start_iterations,
                 "local_search_iterations": config.local_search_iterations,
                 "random_seed": config.random_seed,
+                "active_technician_ids": sorted(active_technician_ids) if active_technician_ids is not None else None,
+                "unavailable_technician_ids": sorted(unavailable_technician_ids) if unavailable_technician_ids is not None else None,
             },
+            selected_technicians=[_debug_technician_input_dict(technician) for technician in technicians],
+            unavailable_technician_ids=sorted(unavailable_technician_ids) if unavailable_technician_ids is not None else [],
             previous_assignment_count=len(base_assignments),
             previous_assignments=[_debug_assignment_dict(assignment) for assignment in base_assignments],
             operational_fixed_assignment_count=len(operational_fixed_assignments),
@@ -2007,6 +2050,7 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
             created_assignment_ticket_ids=[assignment.ticket_id for assignment in created_assignments],
         )
 
+        planned_ticket_id_set = set(planned_ticket_ids)
         if planned_ticket_ids:
             for ticket in session.query(Ticket).filter(Ticket.id.in_(planned_ticket_ids)).all():
                 previous_status = previous_ticket_status_by_ticket_id.get(ticket.id)
@@ -2014,6 +2058,26 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
                     ticket.status = previous_status
                 elif ticket.status in {TicketStatus.OPEN, TicketStatus.PLANNED}:
                     ticket.status = TicketStatus.PLANNED
+
+        # Tickets that were removed from an unavailable technician and could not
+        # be placed with a selected technician must not remain silently planned
+        # without a visible assignment. Return them to OPEN so they stay visible
+        # as unplanned work after the old assignment rows are marked MOVED.
+        preserved_ticket_ids = {assignment.ticket_id for assignment in preserved_assignments if assignment.ticket_id is not None}
+        previous_replan_ticket_ids = {
+            assignment.ticket_id
+            for assignment in base_assignments
+            if assignment.ticket_id is not None
+            and assignment.ticket_id not in preserved_ticket_ids
+            and assignment.status == PlanningAssignmentStatus.PLANNED
+            and assignment.ticket is not None
+            and assignment.ticket.status not in TERMINAL_TICKET_STATUSES
+        }
+        unplanned_previous_ticket_ids = previous_replan_ticket_ids - planned_ticket_id_set
+        if unplanned_previous_ticket_ids:
+            for ticket in session.query(Ticket).filter(Ticket.id.in_(unplanned_previous_ticket_ids)).all():
+                if ticket.status == TicketStatus.PLANNED:
+                    ticket.status = TicketStatus.OPEN
 
         summary = _horizon_summary(day_plans, tickets)
         planning_run.status = PlanningRunStatus.COMPLETED

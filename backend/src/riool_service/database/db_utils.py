@@ -204,6 +204,9 @@ def _install_engine_logging(engine: Engine) -> None:
         if not _is_write_statement(statement):
             return
 
+        if 'route_cache' in statement.lower():
+            return # Skip logging for statements related to the route_cache table
+
         log_debug_event(
             "db.sql.write.before",
             connection_id=id(conn),
@@ -224,6 +227,9 @@ def _install_engine_logging(engine: Engine) -> None:
     ) -> None:
         if not _is_write_statement(statement):
             return
+        
+        if 'route_cache' in statement.lower():
+            return # Skip logging for statements related to the route_cache table
 
         log_debug_event(
             "db.sql.write.after",

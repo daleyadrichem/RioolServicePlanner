@@ -715,3 +715,10 @@ body.waitingCursor * {
   }
 }
 
+
+.techAvailability{display:inline-flex;align-items:center;gap:6px;color:var(--blue);cursor:pointer;}
+.techAvailability input{width:16px;height:16px;margin:0;accent-color:var(--blue);cursor:pointer;}
+.techAvailability input:disabled{cursor:not-allowed;}
+.col.technicianUnavailable{opacity:.72;background:#f8fafc;}
+.col.technicianUnavailable .colHead b{color:#62708e;text-decoration:line-through;}
+.planningSelectionHint{border:1px solid var(--border);border-radius:10px;background:#f8fbff;color:#304366;font-weight:700;font-size:13px;padding:11px 14px;margin:-4px 0 16px;}

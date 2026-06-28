@@ -108,6 +108,7 @@ class InitialPlanningPayload(BaseModel):
     random_seed: int | None = 42
     low_priority_max_extra_travel_minutes: int = 35
     incremental_today_reschedule_penalty_minutes: int = 30
+    active_technician_ids: list[int] | None = None
 
     def as_service_payload(self) -> dict[str, Any]:
         return self.dict(exclude_unset=True)

@@ -1,5 +1,5 @@
 import { AlertTriangle, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock, Gauge, Hourglass, Loader2, MoreVertical, RotateCw, Route, Ticket, User, Waves } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { ApiNotice } from '../components/ApiNotice';
@@ -194,7 +194,7 @@ function addDays(dateString, days) {
   return parsed.toISOString().slice(0, 10);
 }
 
-function TechnicianColumn({ column }) {
+function TechnicianColumn({ column, isSelected = true, onSelectionChange, selectionDisabled = false }) {
   const normalizedColumn = normalizeColumn(column);
   const { technician, items, hour_ticks: hourTicks } = normalizedColumn;
   const columnStartMinutes = minutesFromDayStart(normalizedColumn.timeline_start_at) ?? minutesFromDayStart(hourTicks[0]);
@@ -202,9 +202,18 @@ function TechnicianColumn({ column }) {
   const timelineRows = Math.max(108, Math.ceil((columnEndMinutes - columnStartMinutes) / TIMELINE_SLOT_MINUTES));
 
   return (
-    <div className="col">
+    <div className={`col${isSelected ? '' : ' technicianUnavailable'}`}>
       <div className="colHead">
-        <User size={18} />
+        <label className="techAvailability" title={isSelected ? 'Monteur meenemen in dag herplannen' : 'Monteur niet meenemen in dag herplannen'}>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            disabled={selectionDisabled}
+            onChange={(event) => onSelectionChange?.(technician.id, event.target.checked)}
+            aria-label={`${technician.name} meenemen in dag herplannen`}
+          />
+          <User size={18} />
+        </label>
         <b>{technician.name}</b>
         <span />
         {technician.can_use_ladder && <Ladder size={18} />}
@@ -257,6 +266,30 @@ export function PlanningPage() {
   const stats = planning.stats || emptyPlanning.stats;
   const hasPlan = Boolean(planning.has_plan);
   const columns = useMemo(() => (planning.columns || []).map(normalizeColumn), [planning.columns]);
+  const technicianIds = useMemo(() => columns.map((column) => column.technician.id), [columns]);
+  const [selectedTechnicianIds, setSelectedTechnicianIds] = useState(null);
+
+  useEffect(() => {
+    if (!technicianIds.length) return;
+    setSelectedTechnicianIds((current) => {
+      if (current === null) return technicianIds;
+      const validIds = new Set(technicianIds.map(String));
+      return current.filter((id) => validIds.has(String(id)));
+    });
+  }, [technicianIds]);
+
+  const activeTechnicianIds = selectedTechnicianIds ?? technicianIds;
+  const activeTechnicianIdSet = useMemo(() => new Set(activeTechnicianIds.map(String)), [activeTechnicianIds]);
+  const toggleTechnicianSelection = (technicianId, checked) => {
+    setSelectedTechnicianIds((current) => {
+      const base = current ?? technicianIds;
+      if (checked) {
+        return base.some((id) => String(id) === String(technicianId)) ? base : [...base, technicianId];
+      }
+      return base.filter((id) => String(id) !== String(technicianId));
+    });
+  };
+
   const availableDates = planning.available_dates || [];
   const activeDate = selectedDate || isoDate(planning.planned_date) || availableDates[0] || null;
   const activeDateIndex = availableDates.indexOf(activeDate);
@@ -281,7 +314,7 @@ export function PlanningPage() {
       <PageHeader title="Planning Overzicht">
         <div className="actions">
           {hasPlan && (
-            <Button disabled={planButtonDisabled} onClick={() => runAction(() => api.operationalReplan(activeDate))}>
+            <Button disabled={planButtonDisabled || activeTechnicianIds.length === 0} onClick={() => runAction(() => api.operationalReplan(activeDate, activeTechnicianIds))}>
               {(planningActionLoading || backendPlanningRunning) ? <Loader2 className="spin" size={20} /> : <RotateCw size={20} />}
               Dag herplannen
             </Button>
@@ -322,6 +355,12 @@ export function PlanningPage() {
         </section>
       )}
 
+      {hasPlan && (
+        <div className="planningSelectionHint">
+          Vink monteurs uit die vandaag niet beschikbaar zijn. Bij <b>Dag herplannen</b> blijven afgeronde/gestarte tickets staan; overige tickets worden opnieuw verdeeld over de aangevinkte monteurs.
+        </div>
+      )}
+
       <section className="stats four">
         <StatCard icon={Ticket} label="Open tickets" value={stats.total_today} sub={`• ${stats.planned} toegewezen`} />
         <StatCard icon={AlertTriangle} label="Urgent open" value={stats.urgent_open} sub="• status open" tone="red" />
@@ -336,7 +375,15 @@ export function PlanningPage() {
       )}
 
       <section className="plannerGrid">
-        {columns.map((column) => <TechnicianColumn key={column.technician.id} column={column} />)}
+        {columns.map((column) => (
+          <TechnicianColumn
+            key={column.technician.id}
+            column={column}
+            isSelected={activeTechnicianIdSet.has(String(column.technician.id))}
+            onSelectionChange={toggleTechnicianSelection}
+            selectionDisabled={planButtonDisabled}
+          />
+        ))}
       </section>
     </main>
   );
