@@ -28,6 +28,7 @@ from riool_service.database.models.location import Location
 from riool_service.database.models.requirement import Requirement
 from riool_service.database.models.route_cache import RouteCache, RouteProvider
 from riool_service.database.models.technician import Technician
+from riool_service.database.models.technician_availability import TechnicianAvailability
 from riool_service.database.models.technician_requirement import TechnicianRequirement
 from riool_service.database.models.ticket_requirement import TicketRequirement
 from riool_service.services.planning_ai.models import (
@@ -251,6 +252,7 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None, pla
     all_assignments = _overview_assignments(session, latest_run.id if latest_run else None)
     available_dates = _available_assignment_dates(all_assignments)
     selected_day = _selected_planning_day(planned_date, available_dates, latest_run.planned_date if latest_run else None)
+    availability_by_technician_id = _availability_map(session, branch.id, selected_day) if selected_day is not None else {}
     assignments = [
         assignment
         for assignment in all_assignments
@@ -273,7 +275,10 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None, pla
         timeline_end = _technician_day_end(technician, selected_day_anchor)
         columns.append(
             {
-                "technician": _technician_to_overview_dict(technician),
+                "technician": {
+                    **_technician_to_overview_dict(technician),
+                    "is_available": availability_by_technician_id.get(int(technician.id), True),
+                },
                 "planning_date": selected_day.isoformat() if selected_day else None,
                 "timeline_start_at": timeline_start.isoformat() if timeline_start else None,
                 "timeline_end_at": timeline_end.isoformat() if timeline_end else None,
@@ -318,6 +323,7 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None, pla
 
     return {
         "has_plan": latest_run is not None,
+        "branch_id": branch.id,
         "planning_run_id": latest_run.id if latest_run else None,
         "planning_status": _value(active_run.status) if active_run else (_value(latest_run.status) if latest_run else None),
         "is_planning_running": active_run is not None,
@@ -325,6 +331,9 @@ def get_planning_overview(session: Session, *, branch_id: int | None = None, pla
         "latest_completed_planning_run": _planning_run_to_status_dict(latest_run),
         "planned_date": selected_day.isoformat() if selected_day else (latest_run.planned_date.isoformat() if latest_run and latest_run.planned_date else None),
         "available_dates": [value.isoformat() for value in available_dates],
+        "unavailable_technician_ids": sorted([
+            technician_id for technician_id, is_available in availability_by_technician_id.items() if not is_available
+        ]),
         "stats": {
             "total_today": total_open,
             "planned": len(assigned_ticket_ids),
@@ -441,10 +450,27 @@ def plan_new_ticket_incrementally(
     )
 
     technicians = load_available_technicians(session, config)
+    unavailable_technician_ids = _unavailable_technician_ids_for_date(
+        session,
+        config.branch_id,
+        config.planned_date.date(),
+    )
+    available_today_technician_ids = [
+        int(technician.id)
+        for technician in technicians
+        if int(technician.id) not in unavailable_technician_ids
+    ]
+    if not available_today_technician_ids:
+        raise PlanningAiError(
+            f"No available technicians found for branch {config.branch_id} on {config.planned_date.date().isoformat()}"
+        )
     logger.debug(
-        "Incremental replanner loaded %s available technician(s): %s",
+        "Incremental replanner loaded %s active technician(s), %s available today: active=%s available_today=%s unavailable_today=%s",
         len(technicians),
+        len(available_today_technician_ids),
         [technician.id for technician in technicians],
+        available_today_technician_ids,
+        sorted(unavailable_technician_ids),
     )
     active_assignments = _replanning_base_assignments(session, latest_run.id)
     logger.debug(
@@ -468,7 +494,11 @@ def plan_new_ticket_incrementally(
             "ticket_id": ticket_id,
             "reason": "Ticket has no usable route location.",
         }
-    if not any(new_ticket_input.requirement_codes.issubset(technician.requirement_codes) for technician in technicians):
+    if not any(
+        int(technician.id) in available_today_technician_ids
+        and new_ticket_input.requirement_codes.issubset(technician.requirement_codes)
+        for technician in technicians
+    ):
         logger.debug(
             "Incremental replanner cannot plan ticket_id=%s: requirements=%s do not match any technician",
             ticket_id,
@@ -564,6 +594,7 @@ def plan_new_ticket_incrementally(
             horizon_days=horizon_days,
             original_today=original_today,
             locked_min_positions_by_day=locked_min_positions_by_day,
+            allowed_technician_ids=(available_today_technician_ids if target_day_index == 0 else None),
         )
         if candidate is not None:
             logger.debug(
@@ -607,6 +638,7 @@ def plan_new_ticket_incrementally(
             horizon_days=horizon_days,
             original_today=original_today,
             locked_min_positions_by_day=locked_min_positions_by_day,
+            blocked_day0_technician_ids=unavailable_technician_ids,
         )
         for candidate in tail_candidates:
             logger.debug(
@@ -1018,6 +1050,7 @@ def _incremental_direct_candidate(
     horizon_days: int,
     original_today: dict[int, tuple[int, datetime]],
     locked_min_positions_by_day: dict[int, dict[int, int]],
+    allowed_technician_ids: list[int] | None = None,
 ) -> dict[str, Any] | None:
     day_results: dict[int, tuple[InitialRouteOptimizer, PlanningSolution]] = {}
     for day_index in range(horizon_days):
@@ -1037,6 +1070,7 @@ def _incremental_direct_candidate(
         solution,
         new_ticket,
         min_position_by_technician=locked_min_positions_by_day.get(target_day_index, {}),
+        technician_ids=allowed_technician_ids,
         allow_low_priority=True,
         allow_non_improving=True,
     )
@@ -1068,6 +1102,7 @@ def _incremental_minimal_tail_deferral_candidates(
     horizon_days: int,
     original_today: dict[int, tuple[int, datetime]],
     locked_min_positions_by_day: dict[int, dict[int, int]],
+    blocked_day0_technician_ids: set[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Return bounded urgent-insert candidates by pushing only route tail work.
 
@@ -1080,7 +1115,10 @@ def _incremental_minimal_tail_deferral_candidates(
     """
     results: list[dict[str, Any]] = []
     day0_routes = base_routes_by_day.get(0, {})
+    blocked_day0_technician_ids = blocked_day0_technician_ids or set()
     for technician in technicians:
+        if int(technician.id) in blocked_day0_technician_ids:
+            continue
         if not new_ticket.requirement_codes.issubset(technician.requirement_codes):
             continue
         original_route = day0_routes.get(technician.id, [])
@@ -1820,6 +1858,91 @@ def _copy_assignment_for_new_run(
     )
 
 
+
+def _parse_planning_date(value: str | date | datetime | None, fallback: datetime | None = None) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+    return (fallback or datetime.utcnow()).date()
+
+
+def _availability_map(session: Session, branch_id: int, planned_day: date) -> dict[int, bool]:
+    rows = session.scalars(
+        select(TechnicianAvailability).where(
+            TechnicianAvailability.branch_id == branch_id,
+            TechnicianAvailability.available_date == planned_day,
+        )
+    ).all()
+    return {int(row.technician_id): bool(row.is_available) for row in rows}
+
+
+def _unavailable_technician_ids_for_date(session: Session, branch_id: int, planned_day: date) -> set[int]:
+    return {
+        int(technician_id)
+        for technician_id, is_available in _availability_map(session, branch_id, planned_day).items()
+        if not is_available
+    }
+
+
+def _filter_technicians_available_on_date(
+    session: Session,
+    technicians: list[Any],
+    *,
+    branch_id: int,
+    planned_day: date,
+) -> list[Any]:
+    unavailable_ids = _unavailable_technician_ids_for_date(session, branch_id, planned_day)
+    if not unavailable_ids:
+        return technicians
+    return [technician for technician in technicians if int(technician.id) not in unavailable_ids]
+
+
+def _require_available_technicians(technicians: list[Any], *, branch_id: int, planned_day: date) -> list[Any]:
+    if not technicians:
+        raise PlanningAiError(
+            f"No available technicians found for branch {branch_id} on {planned_day.isoformat()}"
+        )
+    return technicians
+
+
+def set_technician_availability(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    branch_id = int(payload.get("branch_id") or 1)
+    technician_id = int(payload["technician_id"])
+    planned_day = _parse_planning_date(payload.get("planned_date") or payload.get("available_date"))
+    is_available = bool(payload.get("is_available"))
+
+    technician = session.get(Technician, technician_id)
+    if technician is None or int(technician.branch_id) != branch_id:
+        raise PlanningAiError(f"Technician {technician_id} was not found for branch {branch_id}")
+
+    existing = session.scalar(
+        select(TechnicianAvailability).where(
+            TechnicianAvailability.branch_id == branch_id,
+            TechnicianAvailability.technician_id == technician_id,
+            TechnicianAvailability.available_date == planned_day,
+        )
+    )
+    if existing is None:
+        existing = TechnicianAvailability(
+            branch_id=branch_id,
+            technician_id=technician_id,
+            available_date=planned_day,
+            is_available=is_available,
+        )
+        session.add(existing)
+    else:
+        existing.is_available = is_available
+    session.flush()
+    return {
+        "branch_id": branch_id,
+        "technician_id": technician_id,
+        "planned_date": planned_day.isoformat(),
+        "is_available": is_available,
+    }
+
 def _active_technician_ids_from_payload(payload: dict[str, Any]) -> set[int] | None:
     raw_ids = payload.get("active_technician_ids")
     if raw_ids is None:
@@ -1866,11 +1989,19 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
     base_date = config.planned_date.date()
     active_technician_ids = _active_technician_ids_from_payload(payload)
     all_technicians = load_available_technicians(session, config)
-    unavailable_technician_ids = (
-        {int(technician.id) for technician in all_technicians} - active_technician_ids
-        if active_technician_ids is not None
-        else None
-    )
+    if active_technician_ids is not None:
+        all_ids = {int(technician.id) for technician in all_technicians}
+        for technician in all_technicians:
+            set_technician_availability(session, {
+                "branch_id": config.branch_id,
+                "technician_id": int(technician.id),
+                "planned_date": base_date,
+                "is_available": int(technician.id) in active_technician_ids,
+            })
+        unavailable_technician_ids = all_ids - active_technician_ids
+    else:
+        unavailable_technician_ids = _unavailable_technician_ids_for_date(session, config.branch_id, base_date)
+        active_technician_ids = {int(technician.id) for technician in all_technicians} - unavailable_technician_ids
     technicians = _filter_active_replan_technicians(all_technicians, active_technician_ids)
     operational_fixed_assignments = _operational_daytime_assignments(
         base_assignments,
@@ -2815,7 +2946,16 @@ def _move_existing_active_assignments(
 
 def create_initial_planning_proposal(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     config = _config_from_payload(payload)
-    technicians = load_available_technicians(session, config)
+    technicians = _require_available_technicians(
+        _filter_technicians_available_on_date(
+            session,
+            load_available_technicians(session, config),
+            branch_id=config.branch_id,
+            planned_day=config.planned_date.date(),
+        ),
+        branch_id=config.branch_id,
+        planned_day=config.planned_date.date(),
+    )
     tickets = load_candidate_tickets(session, config, technicians)
     matrix = get_planning_route_matrix(
         session,
@@ -2854,7 +2994,16 @@ def run_initial_planning(session: Session, payload: dict[str, Any]) -> dict[str,
                 "candidate plans and insertions were accepted, rejected, or selected."
             ),
         )
-        technicians = load_available_technicians(session, config)
+        technicians = _require_available_technicians(
+            _filter_technicians_available_on_date(
+                session,
+                load_available_technicians(session, config),
+                branch_id=config.branch_id,
+                planned_day=config.planned_date.date(),
+            ),
+            branch_id=config.branch_id,
+            planned_day=config.planned_date.date(),
+        )
         tickets = load_candidate_tickets(session, config, technicians)
         matrix = get_planning_route_matrix(
             session,

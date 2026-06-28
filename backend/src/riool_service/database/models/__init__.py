@@ -11,6 +11,7 @@ from riool_service.database.models.ticket_subjects import TicketSubject
 from riool_service.database.models.requirement import Requirement
 from riool_service.database.models.ticket_requirement import TicketRequirement
 from riool_service.database.models.technician import Technician
+from riool_service.database.models.technician_availability import TechnicianAvailability
 from riool_service.database.models.technician_requirement import TechnicianRequirement
 from riool_service.database.models.planning_run import PlanningRun
 from riool_service.database.models.planning_assignment import PlanningAssignment

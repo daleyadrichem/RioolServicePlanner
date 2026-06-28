@@ -22,6 +22,7 @@ from riool_service.database.models.simulation_tickets import SimulationTicket as
 from riool_service.database.models.simulation_state import SimulationState as _SimulationState  # noqa: F401
 from riool_service.database.models.simulated_technician import SimulatedTechnicianState as _SimulatedTechnicianState  # noqa: F401
 from riool_service.database.models.technician import Technician as _Technician  # noqa: F401
+from riool_service.database.models.technician_availability import TechnicianAvailability as _TechnicianAvailability  # noqa: F401
 from riool_service.database.models.technician_requirement import (  # noqa: F401
     TechnicianRequirement as _TechnicianRequirement,
 )

@@ -113,6 +113,18 @@ class InitialPlanningPayload(BaseModel):
     def as_service_payload(self) -> dict[str, Any]:
         return self.dict(exclude_unset=True)
 
+
+
+class TechnicianAvailabilityPayload(BaseModel):
+    branch_id: int | None = 1
+    technician_id: int
+    planned_date: str | None = None
+    available_date: str | None = None
+    is_available: bool
+
+    def as_service_payload(self) -> dict[str, Any]:
+        return self.dict(exclude_unset=True)
+
 class AddressValidationPayload(BaseModel):
     address: str
     latitude: float | None = None
@@ -309,6 +321,22 @@ def get_planning(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+
+
+@app.patch("/planning/technician-availability")
+def update_technician_availability(payload: TechnicianAvailabilityPayload, session: SessionDep) -> dict:
+    try:
+        result = planning_ai_service.set_technician_availability(session, payload.as_service_payload())
+        session.commit()
+        result["overview"] = planning_ai_service.get_planning_overview(
+            session,
+            branch_id=result["branch_id"],
+            planned_date=result["planned_date"],
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.post("/planning/auto-plan")
 def auto_plan(session: SessionDep, payload: InitialPlanningPayload | None = Body(default=None)) -> dict:

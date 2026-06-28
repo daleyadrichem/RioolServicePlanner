@@ -63,6 +63,7 @@ export const api = {
   },
   autoPlan: () => request('/planning/auto-plan', { method: 'POST' }),
   replan: () => request('/planning/replan', { method: 'POST' }),
+  updateTechnicianAvailability: (payload) => request('/planning/technician-availability', { method: 'PATCH', body: JSON.stringify(payload) }),
   operationalReplan: (plannedDate, activeTechnicianIds) => {
     const body = {};
     if (plannedDate) body.planned_date = plannedDate;

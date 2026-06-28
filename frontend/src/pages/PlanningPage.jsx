@@ -248,7 +248,7 @@ function TechnicianColumn({ column, isSelected = true, onSelectionChange, select
 export function PlanningPage() {
   const [selectedDate, setSelectedDate] = useState(null);
   const loadPlanning = useCallback(() => api.getPlanning(selectedDate), [selectedDate]);
-  const { data: planning, loading, error, reload } = useApi(loadPlanning, emptyPlanning);
+  const { data: planning, setData: setPlanning, loading, error, reload } = useApi(loadPlanning, emptyPlanning);
   const [planningActionLoading, setPlanningActionLoading] = useState(false);
 
   const runAction = async (action) => {
@@ -266,32 +266,50 @@ export function PlanningPage() {
   const stats = planning.stats || emptyPlanning.stats;
   const hasPlan = Boolean(planning.has_plan);
   const columns = useMemo(() => (planning.columns || []).map(normalizeColumn), [planning.columns]);
+  const availableDates = planning.available_dates || [];
+  const activeDate = selectedDate || isoDate(planning.planned_date) || availableDates[0] || null;
   const technicianIds = useMemo(() => columns.map((column) => column.technician.id), [columns]);
+  const availableTechnicianIdsFromBackend = useMemo(
+    () => columns
+      .filter((column) => column.technician.is_available !== false)
+      .map((column) => column.technician.id),
+    [columns],
+  );
   const [selectedTechnicianIds, setSelectedTechnicianIds] = useState(null);
 
   useEffect(() => {
-    if (!technicianIds.length) return;
-    setSelectedTechnicianIds((current) => {
-      if (current === null) return technicianIds;
-      const validIds = new Set(technicianIds.map(String));
-      return current.filter((id) => validIds.has(String(id)));
-    });
-  }, [technicianIds]);
+    setSelectedTechnicianIds(availableTechnicianIdsFromBackend);
+  }, [activeDate, availableTechnicianIdsFromBackend]);
 
-  const activeTechnicianIds = selectedTechnicianIds ?? technicianIds;
+  const activeTechnicianIds = selectedTechnicianIds ?? availableTechnicianIdsFromBackend;
   const activeTechnicianIdSet = useMemo(() => new Set(activeTechnicianIds.map(String)), [activeTechnicianIds]);
-  const toggleTechnicianSelection = (technicianId, checked) => {
+  const availabilityDate = activeDate || isoDate(planning.planned_date) || new Date().toISOString().slice(0, 10);
+  const toggleTechnicianSelection = async (technicianId, checked) => {
     setSelectedTechnicianIds((current) => {
-      const base = current ?? technicianIds;
+      const base = current ?? availableTechnicianIdsFromBackend;
       if (checked) {
         return base.some((id) => String(id) === String(technicianId)) ? base : [...base, technicianId];
       }
       return base.filter((id) => String(id) !== String(technicianId));
     });
+    try {
+      const result = await api.updateTechnicianAvailability({
+        branch_id: planning.branch_id || 1,
+        technician_id: technicianId,
+        planned_date: availabilityDate,
+        is_available: checked,
+      });
+      if (result?.overview) {
+        setPlanning(result.overview);
+      } else {
+        setPlanning(await api.getPlanning(availabilityDate));
+      }
+    } catch (err) {
+      alert(err.message);
+      setPlanning(await api.getPlanning(availabilityDate));
+    }
   };
 
-  const availableDates = planning.available_dates || [];
-  const activeDate = selectedDate || isoDate(planning.planned_date) || availableDates[0] || null;
   const activeDateIndex = availableDates.indexOf(activeDate);
   const canGoPrevious = activeDateIndex > 0;
   const canGoNext = activeDateIndex >= 0 && activeDateIndex < availableDates.length - 1;
@@ -357,7 +375,7 @@ export function PlanningPage() {
 
       {hasPlan && (
         <div className="planningSelectionHint">
-          Vink monteurs uit die vandaag niet beschikbaar zijn. Bij <b>Dag herplannen</b> blijven afgeronde/gestarte tickets staan; overige tickets worden opnieuw verdeeld over de aangevinkte monteurs.
+          Vink monteurs uit die vandaag niet beschikbaar zijn. De beschikbaarheid wordt opgeslagen. Bij <b>Dag herplannen</b> blijven afgeronde/gestarte tickets staan; overige tickets worden opnieuw verdeeld over de beschikbare monteurs.
         </div>
       )}
 
