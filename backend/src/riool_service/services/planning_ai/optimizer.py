@@ -24,6 +24,7 @@ from riool_service.services.planning_ai.models import (
 from riool_service.services.planning_ai.selection import planning_day_end, planning_day_start
 
 SLA_MISS_PENALTY = 100
+URGENT_SLA_MISS_PENALTY = 1_000_000
 # A 3-day initial plan should strongly prefer getting every feasible ticket onto
 # the board. This base penalty is intentionally urgency-neutral: leaving a
 # normal/low ticket unplanned is still bad because it makes the next planning run
@@ -58,6 +59,7 @@ class RouteEvaluation:
     completed_ticket_ids: frozenset[int]
     completed_count: int
     sla_misses: int
+    sla_miss_penalty_points: int
     overtime_minutes: int
     route_work_minutes: int
     route_work_overflow_penalty: int
@@ -725,6 +727,8 @@ class InitialRouteOptimizer:
         extra_latest_ticket_start_penalty = (
             new_stats.latest_ticket_start_penalty - old_stats.latest_ticket_start_penalty
         )
+        extra_sla_miss_penalty = new_stats.sla_miss_penalty_points - old_stats.sla_miss_penalty_points
+        extra_overtime_penalty = (new_stats.overtime_minutes - old_stats.overtime_minutes) * OVERTIME_PENALTY_PER_MINUTE
 
         # Insertion should mostly answer: can we place one more feasible ticket
         # without too much extra route work? The completion reward makes it very
@@ -739,7 +743,9 @@ class InitialRouteOptimizer:
             + defer_penalty
         )
         score_delta = (
-            extra_travel * travel_penalty
+            extra_sla_miss_penalty
+            + extra_overtime_penalty
+            + extra_travel * travel_penalty
             + ticket.service_minutes
             + extra_route_work_overflow_penalty
             + extra_latest_ticket_start_penalty
@@ -760,6 +766,10 @@ class InitialRouteOptimizer:
             new_route_work_minutes=new_stats.route_work_minutes,
             extra_route_work_overflow_penalty=extra_route_work_overflow_penalty,
             extra_latest_ticket_start_penalty=extra_latest_ticket_start_penalty,
+            extra_sla_miss_penalty=extra_sla_miss_penalty,
+            extra_overtime_penalty=extra_overtime_penalty,
+            old_overtime_minutes=old_stats.overtime_minutes,
+            new_overtime_minutes=new_stats.overtime_minutes,
             latest_ticket_start_route_work_minutes=self.config.latest_ticket_start_route_work_minutes,
             latest_ticket_start_penalty_per_minute=self.config.latest_ticket_start_penalty_per_minute,
             travel_penalty_per_minute=self.config.travel_penalty_per_minute,
@@ -771,7 +781,8 @@ class InitialRouteOptimizer:
             priority_bonus_points=priority_bonus,
             service_minutes_cost=ticket.service_minutes,
             score_delta_formula=(
-                "extra_travel * effective_travel_penalty_per_minute "
+                "extra_sla_miss_penalty + extra_overtime_penalty "
+                "+ extra_travel * effective_travel_penalty_per_minute "
                 "+ service_minutes + extra_route_work_overflow_penalty "
                 "+ extra_latest_ticket_start_penalty - priority_bonus"
             ),
@@ -897,7 +908,16 @@ class InitialRouteOptimizer:
                 }
             ]
 
-        if stats.route_end is not None and stats.route_end > planning_day_end(self.config, route.technician):
+        route_has_urgent_ticket = any(
+            self.ticket_by_id[ticket_id].urgency == TicketUrgency.URGENT
+            for ticket_id in route.ticket_ids
+            if ticket_id in self.ticket_by_id
+        )
+        if (
+            stats.route_end is not None
+            and stats.route_end > planning_day_end(self.config, route.technician)
+            and not (self.config.allow_overtime_for_urgent_tickets and route_has_urgent_ticket)
+        ):
             reasons.append(
                 {
                     "technician_id": route.technician.id,
@@ -937,6 +957,7 @@ class InitialRouteOptimizer:
                 completed_ticket_ids=frozenset(),
                 completed_count=0,
                 sla_misses=0,
+                sla_miss_penalty_points=0,
                 overtime_minutes=24 * 60,
                 route_work_minutes=24 * 60,
                 route_work_overflow_penalty=self._route_work_overflow_penalty_points(24 * 60),
@@ -951,6 +972,7 @@ class InitialRouteOptimizer:
         total_distance = 0.0
         completed_ids: set[int] = set()
         sla_misses = 0
+        sla_miss_penalty_points = 0
         non_urgent_minutes = 0
         for item in timeline_tuple:
             if isinstance(item, PlannedTravel):
@@ -960,6 +982,11 @@ class InitialRouteOptimizer:
                 completed_ids.add(item.ticket.id)
                 if item.planned_start_at > item.ticket.deadline_at:
                     sla_misses += 1
+                    sla_miss_penalty_points += (
+                        URGENT_SLA_MISS_PENALTY
+                        if item.ticket.urgency == TicketUrgency.URGENT
+                        else SLA_MISS_PENALTY
+                    )
                 if item.ticket.urgency != TicketUrgency.URGENT:
                     non_urgent_minutes += item.ticket.service_minutes
 
@@ -974,6 +1001,7 @@ class InitialRouteOptimizer:
             completed_ticket_ids=frozenset(completed_ids),
             completed_count=len(completed_ids),
             sla_misses=sla_misses,
+            sla_miss_penalty_points=sla_miss_penalty_points,
             overtime_minutes=overtime,
             route_work_minutes=route_work,
             route_work_overflow_penalty=self._route_work_overflow_penalty_points(route_work),
@@ -989,6 +1017,7 @@ class InitialRouteOptimizer:
         total_distance = 0.0
         completed = 0
         sla_misses = 0
+        sla_miss_penalty_points = 0
         overtime = 0
         route_work_overflow_penalty = 0
         latest_ticket_start_penalty = 0
@@ -1000,6 +1029,7 @@ class InitialRouteOptimizer:
             total_distance += stats.distance_km
             completed += stats.completed_count
             sla_misses += stats.sla_misses
+            sla_miss_penalty_points += stats.sla_miss_penalty_points
             overtime += stats.overtime_minutes
             route_work_overflow_penalty += stats.route_work_overflow_penalty
             latest_ticket_start_penalty += stats.latest_ticket_start_penalty
@@ -1012,6 +1042,7 @@ class InitialRouteOptimizer:
             total_distance=total_distance,
             completed=completed,
             sla_misses=sla_misses,
+            sla_miss_penalty_points=sla_miss_penalty_points,
             overtime=overtime,
             route_work_overflow_penalty=route_work_overflow_penalty,
             latest_ticket_start_penalty=latest_ticket_start_penalty,
@@ -1028,6 +1059,9 @@ class InitialRouteOptimizer:
         total_distance = base.total_distance_km
         completed = base.completed_tickets
         sla_misses = base.sla_misses
+        sla_miss_penalty_points = sum(
+            self._route_evaluation(route).sla_miss_penalty_points for route in base.routes.values()
+        )
         overtime = base.overtime_minutes
         route_work_overflow_penalty = 0
         latest_ticket_start_penalty = 0
@@ -1047,6 +1081,7 @@ class InitialRouteOptimizer:
             total_distance += new_stats.distance_km - old_stats.distance_km
             completed += new_stats.completed_count - old_stats.completed_count
             sla_misses += new_stats.sla_misses - old_stats.sla_misses
+            sla_miss_penalty_points += new_stats.sla_miss_penalty_points - old_stats.sla_miss_penalty_points
             overtime += new_stats.overtime_minutes - old_stats.overtime_minutes
             route_work_overflow_penalty += new_stats.route_work_overflow_penalty - old_stats.route_work_overflow_penalty
             latest_ticket_start_penalty += new_stats.latest_ticket_start_penalty - old_stats.latest_ticket_start_penalty
@@ -1057,6 +1092,7 @@ class InitialRouteOptimizer:
             total_distance=total_distance,
             completed=completed,
             sla_misses=sla_misses,
+            sla_miss_penalty_points=sla_miss_penalty_points,
             overtime=overtime,
             route_work_overflow_penalty=route_work_overflow_penalty,
             latest_ticket_start_penalty=latest_ticket_start_penalty,
@@ -1070,6 +1106,7 @@ class InitialRouteOptimizer:
         total_distance: float,
         completed: int,
         sla_misses: int,
+        sla_miss_penalty_points: int,
         overtime: int,
         route_work_overflow_penalty: int,
         latest_ticket_start_penalty: int,
@@ -1088,7 +1125,7 @@ class InitialRouteOptimizer:
         solution.sla_misses = sla_misses
         solution.overtime_minutes = overtime
         solution.score = (
-            sla_misses * SLA_MISS_PENALTY
+            sla_miss_penalty_points
             + unplanned_penalty
             + overtime * OVERTIME_PENALTY_PER_MINUTE
             + route_work_overflow_penalty
@@ -1158,7 +1195,10 @@ class InitialRouteOptimizer:
                 }
             )
         travel_cost = solution.total_travel_minutes * travel_penalty
-        sla_cost = solution.sla_misses * SLA_MISS_PENALTY
+        sla_cost = sum(
+            self._route_evaluation(route).sla_miss_penalty_points
+            for route in solution.routes.values()
+        )
         overtime_cost = solution.overtime_minutes * OVERTIME_PENALTY_PER_MINUTE
         unplanned_cost = sum(item["ticket_unplanned_cost"] for item in unplanned_details)
         return {
@@ -1174,7 +1214,8 @@ class InitialRouteOptimizer:
             "unplanned_cost": unplanned_cost,
             "unplanned_details": unplanned_details,
             "sla_misses": solution.sla_misses,
-            "sla_miss_penalty_per_ticket": SLA_MISS_PENALTY,
+            "normal_sla_miss_penalty_per_ticket": SLA_MISS_PENALTY,
+            "urgent_sla_miss_penalty_per_ticket": URGENT_SLA_MISS_PENALTY,
             "sla_cost": sla_cost,
             "overtime_minutes": solution.overtime_minutes,
             "overtime_penalty_per_minute": OVERTIME_PENALTY_PER_MINUTE,

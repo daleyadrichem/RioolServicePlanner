@@ -408,6 +408,28 @@ body.waitingCursor * {
   overflow:hidden;
   min-height:0;
   align-self:stretch;
+  z-index:3;
+}
+
+.workdayEndMarker{
+  position:relative;
+  grid-column:1/-1;
+  border-top:2px dotted #fb923c;
+  height:0;
+  margin-left:-6px;
+  z-index:2;
+  pointer-events:none;
+}
+.workdayEndMarker::after{
+  content:'16:45';
+  position:absolute;
+  right:6px;
+  transform:translateY(-50%);
+  background:white;
+  color:#c2410c;
+  font-size:10px;
+  font-weight:800;
+  padding:0 4px;
 }
 
 .job.completed{opacity:.86;}

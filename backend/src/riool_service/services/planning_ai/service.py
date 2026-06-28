@@ -551,6 +551,7 @@ def plan_new_ticket_incrementally(
             initial_route_work_minutes_per_technician=24 * 60,
             latest_ticket_start_route_work_minutes=24 * 60,
             latest_ticket_start_penalty_per_minute=0,
+            allow_overtime_for_urgent_tickets=True,
         )
 
     existing_inputs = _ticket_inputs_from_assignments(active_assignments, config)
@@ -649,9 +650,9 @@ def plan_new_ticket_incrementally(
         and assignment.ticket_id in ticket_inputs_by_id
         and ticket_inputs_by_id[assignment.ticket_id].urgency != TicketUrgency.URGENT
     ]
-    if new_ticket_input.urgency == TicketUrgency.URGENT and horizon_days > 1 and not candidates:
+    if new_ticket_input.urgency == TicketUrgency.URGENT and horizon_days > 1:
         logger.debug(
-            "Incremental replanner urgent ticket_id=%s has no direct feasible insert; trying minimal same-route tail deferrals: today_non_urgent=%s",
+            "Incremental replanner urgent ticket_id=%s trying minimal same-route tail deferrals/overtime reduction: today_non_urgent=%s",
             ticket_id,
             today_non_urgent_ids,
         )
@@ -1146,7 +1147,30 @@ def _incremental_direct_candidate(
         allow_non_improving=True,
     )
     if insertion is None:
-        return None
+        # Last-resort urgent policy: an urgent same-day ticket must be planned
+        # whenever the route timeline can be built.  The normal insertion helper
+        # still uses hard feasibility gates internally; if those gates reject all
+        # positions, bypass them for urgent day-0 inserts and let the high
+        # overtime/SLA score decide.  This is intentionally limited to urgent
+        # tickets on the active day and still respects skills plus the locked
+        # prefix, so completed/in-progress work is never moved behind the new job.
+        if new_ticket.urgency != TicketUrgency.URGENT or target_day_index != 0:
+            return None
+        forced = _forced_urgent_overtime_candidate(
+            config=config,
+            technicians=technicians,
+            matrix=matrix,
+            base_routes_by_day=base_routes_by_day,
+            ticket_inputs_by_id=ticket_inputs_by_id,
+            new_ticket=new_ticket,
+            horizon_days=horizon_days,
+            original_today=original_today,
+            locked_min_positions_by_day=locked_min_positions_by_day,
+            allowed_technician_ids=allowed_technician_ids,
+        )
+        if forced is not None:
+            forced["forced_urgent_overtime"] = True
+        return forced
     solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, new_ticket.id)
     # Incremental direct insertion intentionally does not run local-search repair.
     # The goal is to keep the existing plan stable and only move the affected
@@ -1160,6 +1184,87 @@ def _incremental_direct_candidate(
         original_today=original_today,
     )
 
+
+
+def _forced_urgent_overtime_candidate(
+    *,
+    config: PlanningConfig,
+    technicians: list[Any],
+    matrix: Any,
+    base_routes_by_day: dict[int, dict[int, list[int]]],
+    ticket_inputs_by_id: dict[int, TicketInput],
+    new_ticket: TicketInput,
+    horizon_days: int,
+    original_today: dict[int, tuple[int, datetime]],
+    locked_min_positions_by_day: dict[int, dict[int, int]],
+    allowed_technician_ids: list[int] | None = None,
+) -> dict[str, Any] | None:
+    """Build a same-day urgent candidate without day-end hard rejection.
+
+    This is the safety net for late urgent tickets: if the regular insertion
+    helper rejects every position, append/insert the urgent ticket after the
+    locked prefix on a qualified available technician and score the resulting
+    overtime instead of dropping the ticket.
+    """
+    if new_ticket.urgency != TicketUrgency.URGENT:
+        return None
+
+    candidate_technician_ids = set(allowed_technician_ids or [technician.id for technician in technicians])
+    best: dict[str, Any] | None = None
+    best_meta: tuple[int, int] | None = None
+    day0_routes = base_routes_by_day.get(0, {})
+
+    for technician in technicians:
+        if technician.id not in candidate_technician_ids:
+            continue
+        if not new_ticket.requirement_codes.issubset(technician.requirement_codes):
+            continue
+        original_route = day0_routes.get(technician.id, [])
+        min_position = max(0, locked_min_positions_by_day.get(0, {}).get(technician.id, 0))
+        for position in range(min_position, len(original_route) + 1):
+            day_results: dict[int, tuple[InitialRouteOptimizer, PlanningSolution]] = {}
+            for day_index in range(horizon_days):
+                routes_for_day = {
+                    route_technician_id: route_ids[:]
+                    for route_technician_id, route_ids in base_routes_by_day[day_index].items()
+                }
+                if day_index == 0:
+                    routes_for_day.setdefault(technician.id, [])
+                    routes_for_day[technician.id].insert(position, new_ticket.id)
+                optimizer, solution = _optimizer_from_routes(
+                    config=_day_config(config, day_index),
+                    technicians=technicians,
+                    matrix=matrix,
+                    ticket_inputs_by_id=ticket_inputs_by_id,
+                    routes_for_day=routes_for_day,
+                    extra_ticket_ids={new_ticket.id} if day_index == 0 else set(),
+                )
+                day_results[day_index] = (optimizer, solution)
+
+            today_optimizer, today_solution = day_results[0]
+            today_route = today_solution.routes.get(technician.id)
+            if today_route is None:
+                continue
+            # Keep the one non-negotiable feasibility requirement: the timeline
+            # must be constructible.  Overtime and normal route-work limits are
+            # represented as score penalties for this urgent fallback.
+            if today_optimizer._route_evaluation(today_route).timeline is None:  # noqa: SLF001
+                continue
+
+            candidate = _incremental_candidate_result(
+                config=config,
+                day_results=day_results,
+                new_ticket_day_index=0,
+                original_today=original_today,
+            )
+            if best is None or candidate["score"] < best["score"]:
+                best = candidate
+                best_meta = (technician.id, position)
+
+    if best is not None and best_meta is not None:
+        best["inserted_technician_id"] = best_meta[0]
+        best["inserted_position"] = best_meta[1]
+    return best
 
 
 def _incremental_minimal_tail_deferral_candidates(
@@ -1213,9 +1318,17 @@ def _incremental_minimal_tail_deferral_candidates(
 
             moved_ticket_ids: list[int] = []
             # Remove only as much non-urgent tail work as needed, and only from
-            # the route that received the urgent ticket. Prefer preserving earlier
-            # appointments on that route and all other mechanics' routes.
-            while not optimizer._is_solution_hard_feasible(solution):  # noqa: SLF001
+            # the route that received the urgent ticket. For urgent inserts the
+            # day-end hard constraint is relaxed, so also remove safe non-urgent
+            # tail tickets while doing so reduces overtime. A ticket is safe to
+            # push out only when its SLA is not due on the active planning day.
+            while True:
+                route_stats = optimizer._route_evaluation(solution.routes[technician.id])  # noqa: SLF001
+                needs_repair = not optimizer._is_solution_hard_feasible(solution)  # noqa: SLF001
+                should_reduce_overtime = route_stats.overtime_minutes > 0
+                if not needs_repair and not should_reduce_overtime:
+                    break
+
                 route_ids = solution.routes[technician.id].ticket_ids
                 removable_index = next(
                     (
@@ -1224,6 +1337,7 @@ def _incremental_minimal_tail_deferral_candidates(
                         if idx >= min_position
                         and route_ids[idx] != new_ticket.id
                         and ticket_inputs_by_id[route_ids[idx]].urgency != TicketUrgency.URGENT
+                        and ticket_inputs_by_id[route_ids[idx]].deadline_at.date() > config.planned_date.date()
                     ),
                     None,
                 )
@@ -1286,6 +1400,18 @@ def _incremental_minimal_tail_deferral_candidates(
     return results
 
 
+def _ticket_misses_sla_in_solution(
+    optimizer: InitialRouteOptimizer,
+    solution: PlanningSolution,
+    ticket_id: int,
+) -> bool:
+    for technician_id in solution.routes:
+        for stop in optimizer.build_stops(solution, technician_id):
+            if stop.ticket.id == ticket_id:
+                return stop.planned_start_at > stop.ticket.deadline_at
+    return True
+
+
 def _place_moved_tickets_greedily(
     *,
     config: PlanningConfig,
@@ -1327,6 +1453,8 @@ def _place_moved_tickets_greedily(
                 continue
             solution.routes[insertion.technician_id].ticket_ids.insert(insertion.position, moved_ticket_id)
             optimizer._score(solution)  # noqa: SLF001
+            if _ticket_misses_sla_in_solution(optimizer, solution, moved_ticket_id):
+                continue
             candidate_score = solution.score
             if best is None or candidate_score < best[0]:
                 best = (

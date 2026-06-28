@@ -67,6 +67,10 @@ class PlanningConfig:
     # planning day during incremental new-ticket insertion. Expressed as
     # equivalent travel minutes so it is naturally weighed against route quality.
     incremental_today_reschedule_penalty_minutes: int = 30
+    # Only enabled by the single-ticket incremental replanner for urgent tickets.
+    # It removes the day-end hard constraint for routes carrying urgent work,
+    # while keeping overtime very expensive in the score.
+    allow_overtime_for_urgent_tickets: bool = False
 
 
 @dataclass(frozen=True)

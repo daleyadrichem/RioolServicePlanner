@@ -48,6 +48,13 @@ function durationFromTimes(startMinutes, endMinutes) {
   return Math.max(0, endMinutes - startMinutes);
 }
 
+
+function ensureTimelineTicksTo18(hourTicks) {
+  const ticks = Array.isArray(hourTicks) ? [...hourTicks] : [];
+  if (!ticks.includes('18:00')) ticks.push('18:00');
+  return ticks.sort((a, b) => (minutesFromDayStart(a) ?? 0) - (minutesFromDayStart(b) ?? 0));
+}
+
 function toHourTicks(column) {
   if (Array.isArray(column.hour_ticks) && column.hour_ticks.length) {
     return column.hour_ticks.map((tick) => (typeof tick === 'string' ? tick : formatTime(tick))).filter(Boolean);
@@ -107,7 +114,7 @@ function normalizeColumn(column) {
   const items = timeline
     .map((item, index) => normalizeTimelineItem(item, index, fallbackDate))
     .filter(shouldShowTimelineItem);
-  return { ...column, items, hour_ticks: toHourTicks(column) };
+  return { ...column, items, hour_ticks: ensureTimelineTicksTo18(toHourTicks(column)) };
 }
 
 function toneForItem(item) {
@@ -198,8 +205,13 @@ function TechnicianColumn({ column, isSelected = true, onSelectionChange, select
   const normalizedColumn = normalizeColumn(column);
   const { technician, items, hour_ticks: hourTicks } = normalizedColumn;
   const columnStartMinutes = minutesFromDayStart(normalizedColumn.timeline_start_at) ?? minutesFromDayStart(hourTicks[0]);
-  const columnEndMinutes = minutesFromDayStart(normalizedColumn.timeline_end_at) ?? minutesFromDayStart(hourTicks[hourTicks.length - 1]) ?? 17 * 60;
+  const backendEndMinutes = minutesFromDayStart(normalizedColumn.timeline_end_at) ?? minutesFromDayStart(hourTicks[hourTicks.length - 1]) ?? 17 * 60;
+  const columnEndMinutes = Math.max(18 * 60, backendEndMinutes);
   const timelineRows = Math.max(108, Math.ceil((columnEndMinutes - columnStartMinutes) / TIMELINE_SLOT_MINUTES));
+  const fullDayMarkerMinutes = 16 * 60 + 45;
+  const fullDayMarkerRow = columnStartMinutes == null
+    ? null
+    : Math.round((fullDayMarkerMinutes - columnStartMinutes) / TIMELINE_SLOT_MINUTES) + 1;
 
   return (
     <div className={`col${isSelected ? '' : ' technicianUnavailable'}`}>
@@ -232,6 +244,9 @@ function TechnicianColumn({ column, isSelected = true, onSelectionChange, select
           })}
         </div>
         <div className="jobs hourlyJobs" style={{ gridTemplateRows: `repeat(${timelineRows}, ${TIMELINE_SLOT_HEIGHT_PX}px)` }}>
+          {fullDayMarkerRow != null && fullDayMarkerRow > 0 && fullDayMarkerRow <= timelineRows && (
+            <div className="workdayEndMarker" style={{ gridRow: fullDayMarkerRow }} title="Einde 8-urige werkdag · 16:45" />
+          )}
           {items.map((item, itemIndex) => (
             <PlanningJob
               key={`${item.id || item.title}-${itemIndex}`}
