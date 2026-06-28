@@ -550,6 +550,7 @@ def plan_new_ticket_incrementally(
             initial_non_urgent_minutes_per_technician=24 * 60,
             initial_route_work_minutes_per_technician=24 * 60,
             latest_ticket_start_route_work_minutes=24 * 60,
+            latest_ticket_start_penalty_per_minute=0,
         )
 
     existing_inputs = _ticket_inputs_from_assignments(active_assignments, config)
@@ -2109,6 +2110,7 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
                 "planning_horizon_days": config.planning_horizon_days,
                 "initial_route_work_minutes_per_technician": config.initial_route_work_minutes_per_technician,
                 "latest_ticket_start_route_work_minutes": config.latest_ticket_start_route_work_minutes,
+                "latest_ticket_start_penalty_per_minute": config.latest_ticket_start_penalty_per_minute,
                 "today_travel_penalty_multiplier": config.today_travel_penalty_multiplier,
                 "defer_to_day_2_penalty_minutes": config.defer_to_day_2_penalty_minutes,
                 "defer_to_day_3_penalty_minutes": config.defer_to_day_3_penalty_minutes,
@@ -3331,8 +3333,14 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
             or payload.get("initial_planned_minutes_per_technician")
             or 360
         ),
+        route_work_overflow_grace_minutes=int(
+            payload.get("route_work_overflow_grace_minutes") or 15
+        ),
         latest_ticket_start_route_work_minutes=int(
-            payload.get("latest_ticket_start_route_work_minutes") or 300
+            payload.get("latest_ticket_start_route_work_minutes") or 360
+        ),
+        latest_ticket_start_penalty_per_minute=int(
+            payload.get("latest_ticket_start_penalty_per_minute") or 40
         ),
         travel_penalty_per_minute=int(payload.get("travel_penalty_per_minute") or 25),
         today_travel_penalty_multiplier=float(
@@ -3342,7 +3350,7 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
         ),
         planning_horizon_days=max(1, int(payload.get("planning_horizon_days") or 3)),
         defer_to_day_2_penalty_minutes=int(
-            payload.get("defer_to_day_2_penalty_minutes") or 45
+            payload.get("defer_to_day_2_penalty_minutes") or 50
         ),
         defer_to_day_3_penalty_minutes=int(
             payload.get("defer_to_day_3_penalty_minutes") or 120
@@ -3532,7 +3540,9 @@ def _horizon_solution_as_dict(config: PlanningConfig, day_plans: list[dict[str, 
         "planning_horizon_days": config.planning_horizon_days,
         "planned_service_minutes_per_technician_per_day": config.initial_non_urgent_minutes_per_technician,
         "planned_route_work_minutes_per_technician_per_day": config.initial_route_work_minutes_per_technician,
+        "route_work_overflow_grace_minutes": config.route_work_overflow_grace_minutes,
         "latest_ticket_start_route_work_minutes": config.latest_ticket_start_route_work_minutes,
+        "latest_ticket_start_penalty_per_minute": config.latest_ticket_start_penalty_per_minute,
         "reserved_urgent_minutes_per_technician_per_day": max(
             0, 8 * 60 - config.initial_route_work_minutes_per_technician
         ),
@@ -3638,8 +3648,12 @@ def _solution_as_dict(
             "planned_route_work_minutes_per_technician": (
                 config.initial_route_work_minutes_per_technician
             ),
+            "route_work_overflow_grace_minutes": config.route_work_overflow_grace_minutes,
             "latest_ticket_start_route_work_minutes": (
                 config.latest_ticket_start_route_work_minutes
+            ),
+            "latest_ticket_start_penalty_per_minute": (
+                config.latest_ticket_start_penalty_per_minute
             ),
             "travel_penalty_per_minute": config.travel_penalty_per_minute,
             "active_day_travel_penalty_multiplier": config.active_day_travel_penalty_multiplier,

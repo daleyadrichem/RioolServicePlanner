@@ -23,10 +23,15 @@ class PlanningConfig:
     # so travel/HQ pickups are counted in the initial plan workload target.
     initial_non_urgent_minutes_per_technician: int = 6 * 60
     initial_route_work_minutes_per_technician: int = 6 * 60
+    # The first few minutes above the initial route-work target are allowed
+    # without overflow penalty, so a slightly longer same-day plan can beat
+    # deferring a ticket to tomorrow.
+    route_work_overflow_grace_minutes: int = 15
     # Prefer not to start another ticket once a technician already has this
-    # many route-work minutes on the day. Finishing the current ticket slightly
-    # above the 6h target is allowed and penalized softly in the score.
-    latest_ticket_start_route_work_minutes: int = 5 * 60
+    # many route-work minutes on the day. This is a soft preference: starting
+    # later is allowed but receives latest_ticket_start_penalty_per_minute.
+    latest_ticket_start_route_work_minutes: int = 6 * 60
+    latest_ticket_start_penalty_per_minute: int = 40
     travel_penalty_per_minute: int = 25
     # Multiplier applied to travel minutes in the optimizer score for the active
     # planning day. In multi-day planning this defaults to 5x for today and 1x
@@ -38,9 +43,9 @@ class PlanningConfig:
     # Soft penalty, expressed as equivalent extra driving minutes, for leaving a
     # ticket unplanned today and therefore pushing it to a later day.
     # With travel_penalty_per_minute=25, defaults are:
-    # - day 1 -> day 2: 45 * 25 = 1125 score points per deferred ticket
+    # - day 1 -> day 2: 50 * 25 = 1250 score points per deferred ticket
     # - day 2 -> day 3: 120 * 25 = 3000 score points per deferred ticket
-    defer_to_day_2_penalty_minutes: int = 45
+    defer_to_day_2_penalty_minutes: int = 50
     defer_to_day_3_penalty_minutes: int = 120
     # In a multi-day horizon, a ticket left off a non-final day is deferred, not
     # truly unplanned. Keep the million-point base penalty only on the final
