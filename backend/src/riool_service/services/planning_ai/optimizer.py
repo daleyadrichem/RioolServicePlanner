@@ -50,6 +50,21 @@ class Insertion:
     score_delta: float
 
 
+@dataclass(frozen=True)
+class RouteEvaluation:
+    timeline: tuple[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak, ...] | None
+    travel_minutes: int
+    distance_km: float
+    completed_ticket_ids: frozenset[int]
+    completed_count: int
+    sla_misses: int
+    overtime_minutes: int
+    route_work_minutes: int
+    route_work_overflow_penalty: int
+    non_urgent_minutes: int
+    route_end: datetime | None
+
+
 class InitialRouteOptimizer:
     """Multi-start randomized cheapest insertion + local-search optimizer."""
 
@@ -71,6 +86,17 @@ class InitialRouteOptimizer:
         self.random = random.Random(config.random_seed)
         self.debug_log_path = Path(debug_log_path) if debug_log_path is not None else None
         self.debug_label = debug_label or f"planning_date={config.planned_date.date().isoformat()}"
+        # Route timelines and route-level scoring are recalculated thousands of
+        # times during cheapest insertion and local search. The optimizer never
+        # mutates a route object after it has been passed to these helpers; it
+        # creates changed-route copies instead. That makes a per-run cache keyed
+        # by technician + ticket sequence safe and avoids rebuilding unchanged
+        # routes for every candidate solution.
+        self._route_timeline_cache: dict[
+            tuple[int, tuple[int, ...], bool],
+            tuple[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak, ...] | None,
+        ] = {}
+        self._route_evaluation_cache: dict[tuple[int, tuple[int, ...]], RouteEvaluation] = {}
 
     def _debug(self, message: str, **fields: Any) -> None:
         """Append high-volume optimizer diagnostics to the per-planning-run log file.
@@ -288,8 +314,8 @@ class InitialRouteOptimizer:
         self._debug("local_search_started", initial_cost=best.score)
         for local_iteration in range(max(0, self.config.local_search_iterations)):
             changed = False
-            for candidate in self._move_candidates(best):
-                self._score(candidate)
+            for candidate, changed_route_ids in self._move_candidates(best):
+                self._score_changed_routes(best, candidate, changed_route_ids)
                 if candidate.score < best.score:
                     self._debug(
                         "local_search_improvement",
@@ -305,8 +331,8 @@ class InitialRouteOptimizer:
             if changed:
                 continue
 
-            for candidate in self._swap_candidates(best):
-                self._score(candidate)
+            for candidate, changed_route_ids in self._swap_candidates(best):
+                self._score_changed_routes(best, candidate, changed_route_ids)
                 if candidate.score < best.score:
                     self._debug(
                         "local_search_improvement",
@@ -322,8 +348,8 @@ class InitialRouteOptimizer:
             if changed:
                 continue
 
-            for candidate in self._two_opt_candidates(best):
-                self._score(candidate)
+            for candidate, changed_route_ids in self._two_opt_candidates(best):
+                self._score_changed_routes(best, candidate, changed_route_ids)
                 if candidate.score < best.score:
                     self._debug(
                         "local_search_improvement",
@@ -344,8 +370,8 @@ class InitialRouteOptimizer:
             # of the tickets that happened to be inserted first. This operator
             # swaps one planned ticket with one currently-unplanned ticket and
             # reinserts the incoming ticket in the same technician route.
-            for candidate in self._unplanned_replacement_candidates(best):
-                self._score(candidate)
+            for candidate, changed_route_ids in self._unplanned_replacement_candidates(best):
+                self._score_changed_routes(best, candidate, changed_route_ids)
                 if candidate.score < best.score:
                     self._debug(
                         "local_search_improvement",
@@ -381,12 +407,15 @@ class InitialRouteOptimizer:
                     if not self._can_do(to_route.technician, ticket):
                         continue
                     for insert_position in range(len(to_route.ticket_ids) + 1):
-                        candidate = solution.copy()
+                        candidate = self._copy_solution_for_route_changes(
+                            solution,
+                            {from_technician_id, to_technician_id},
+                        )
                         candidate.routes[from_technician_id].ticket_ids.pop(position)
-                        adjusted_position = insert_position
-                        candidate.routes[to_technician_id].ticket_ids.insert(adjusted_position, ticket_id)
-                        if self._is_solution_hard_feasible(candidate):
-                            yield candidate
+                        candidate.routes[to_technician_id].ticket_ids.insert(insert_position, ticket_id)
+                        changed_route_ids = {from_technician_id, to_technician_id}
+                        if self._are_routes_hard_feasible(candidate, changed_route_ids):
+                            yield candidate, changed_route_ids
 
     def _swap_candidates(self, solution: PlanningSolution):
         for first_id, second_id in combinations(list(solution.routes), 2):
@@ -404,11 +433,12 @@ class InitialRouteOptimizer:
                         continue
                     if not self._can_do(second_route.technician, first_ticket):
                         continue
-                    candidate = solution.copy()
+                    candidate = self._copy_solution_for_route_changes(solution, {first_id, second_id})
                     candidate.routes[first_id].ticket_ids[first_position] = second_ticket.id
                     candidate.routes[second_id].ticket_ids[second_position] = first_ticket.id
-                    if self._is_solution_hard_feasible(candidate):
-                        yield candidate
+                    changed_route_ids = {first_id, second_id}
+                    if self._are_routes_hard_feasible(candidate, changed_route_ids):
+                        yield candidate, changed_route_ids
 
     def _unplanned_replacement_candidates(self, solution: PlanningSolution):
         """Swap one planned ticket with one unplanned/deferred ticket.
@@ -444,12 +474,15 @@ class InitialRouteOptimizer:
                     # for the incoming ticket in the same route. This allows both
                     # a direct replacement and a small within-route reorder.
                     for insert_position in range(len(route.ticket_ids)):
-                        candidate = solution.copy()
+                        candidate = self._copy_solution_for_route_changes(solution, {technician_id})
                         candidate_route = candidate.routes[technician_id]
                         candidate_route.ticket_ids.pop(planned_position)
                         candidate_route.ticket_ids.insert(insert_position, incoming_ticket_id)
-                        if self._is_solution_hard_feasible(candidate):
-                            yield candidate
+                        candidate.unplanned_ticket_ids.discard(incoming_ticket_id)
+                        candidate.unplanned_ticket_ids.add(outgoing_ticket.id)
+                        changed_route_ids = {technician_id}
+                        if self._are_routes_hard_feasible(candidate, changed_route_ids):
+                            yield candidate, changed_route_ids
 
     def _can_replace_planned_with_unplanned(
         self,
@@ -480,14 +513,15 @@ class InitialRouteOptimizer:
                 continue
             for i in range(0, len(route.ticket_ids) - 2):
                 for j in range(i + 2, len(route.ticket_ids) + 1):
-                    candidate = solution.copy()
+                    candidate = self._copy_solution_for_route_changes(solution, {technician_id})
                     candidate.routes[technician_id].ticket_ids = (
                         route.ticket_ids[:i]
                         + list(reversed(route.ticket_ids[i:j]))
                         + route.ticket_ids[j:]
                     )
-                    if self._is_solution_hard_feasible(candidate):
-                        yield candidate
+                    changed_route_ids = {technician_id}
+                    if self._are_routes_hard_feasible(candidate, changed_route_ids):
+                        yield candidate, changed_route_ids
 
     def _best_insertion(
         self,
@@ -588,15 +622,31 @@ class InitialRouteOptimizer:
     ) -> Insertion | None:
         # Evaluate the real route delta, not just the direct edge replacement.
         # A ticket with requirements may introduce, remove, or move the one-time
-        # HQ pickup. The direct calculation below used to ignore that detour,
-        # so cheapest-insertion could prefer routes that only looked cheap before
-        # the timeline builder inserted home/previous stop -> HQ -> ticket.
-        old_travel, old_distance = self._route_travel_and_distance(route)
+        # HQ pickup. Cheap route-only rejects are performed before copying a full
+        # candidate solution, because most failed insertions are obviously past
+        # the protected latest-ticket-start route-work buffer.
+        old_stats = self._route_evaluation(route)
+        old_travel, old_distance = old_stats.travel_minutes, old_stats.distance_km
 
-        candidate = solution.copy()
+        candidate_ticket_ids = route.ticket_ids[:]
+        candidate_ticket_ids.insert(position, ticket.id)
+        cheap_reasons = self._cheap_insertion_feasibility_reasons(route, ticket, position, candidate_ticket_ids)
+        if cheap_reasons:
+            self._debug(
+                "insertion_candidate_rejected",
+                ticket_id=ticket.id,
+                technician_id=route.technician.id,
+                position=position,
+                reason="hard_feasibility_failed",
+                feasibility_reasons=cheap_reasons,
+                route_ticket_ids=candidate_ticket_ids,
+            )
+            return None
+
+        candidate = self._copy_solution_for_route_changes(solution, {route.technician.id})
         candidate_route = candidate.routes[route.technician.id]
         candidate_route.ticket_ids.insert(position, ticket.id)
-        feasibility_reasons = self._hard_feasibility_reasons(candidate)
+        feasibility_reasons = self._hard_feasibility_reasons_for_route(candidate_route)
         if feasibility_reasons:
             self._debug(
                 "insertion_candidate_rejected",
@@ -609,18 +659,11 @@ class InitialRouteOptimizer:
             )
             return None
 
-        new_travel, new_distance = self._route_travel_and_distance(candidate_route)
-        extra_travel = new_travel - old_travel
-        extra_distance = new_distance - old_distance
-        old_route_work = self._route_work_minutes(
-            self._route_timeline(route, include_return_home=True) or []
-        )
-        new_route_work = self._route_work_minutes(
-            self._route_timeline(candidate_route, include_return_home=True) or []
-        )
+        new_stats = self._route_evaluation(candidate_route)
+        extra_travel = new_stats.travel_minutes - old_travel
+        extra_distance = new_stats.distance_km - old_distance
         extra_route_work_overflow_penalty = (
-            self._route_work_overflow_penalty_points(new_route_work)
-            - self._route_work_overflow_penalty_points(old_route_work)
+            new_stats.route_work_overflow_penalty - old_stats.route_work_overflow_penalty
         )
 
         # Insertion should mostly answer: can we place one more feasible ticket
@@ -647,13 +690,13 @@ class InitialRouteOptimizer:
             technician_id=route.technician.id,
             position=position,
             old_travel_minutes=old_travel,
-            new_travel_minutes=new_travel,
+            new_travel_minutes=new_stats.travel_minutes,
             extra_travel_minutes=extra_travel,
             old_distance_km=old_distance,
-            new_distance_km=new_distance,
+            new_distance_km=new_stats.distance_km,
             extra_distance_km=extra_distance,
-            old_route_work_minutes=old_route_work,
-            new_route_work_minutes=new_route_work,
+            old_route_work_minutes=old_stats.route_work_minutes,
+            new_route_work_minutes=new_stats.route_work_minutes,
             extra_route_work_overflow_penalty=extra_route_work_overflow_penalty,
             travel_penalty_per_minute=self.config.travel_penalty_per_minute,
             active_day_travel_multiplier=self.config.active_day_travel_penalty_multiplier,
@@ -677,80 +720,224 @@ class InitialRouteOptimizer:
             score_delta=score_delta,
         )
 
-    def _route_travel_and_distance(self, route: MechanicRoute) -> tuple[int, float]:
-        timeline = self._route_timeline(route, include_return_home=True)
-        if timeline is None:
-            return 24 * 60, 0.0
-        return (
-            sum(item.travel_minutes for item in timeline if isinstance(item, PlannedTravel)),
-            sum(item.distance_km for item in timeline if isinstance(item, PlannedTravel)),
+    def _copy_solution_for_route_changes(
+        self,
+        solution: PlanningSolution,
+        changed_route_ids: set[int],
+    ) -> PlanningSolution:
+        """Copy only the routes that a candidate will mutate.
+
+        The previous local-search loop deep-copied every mechanic route for every
+        move, swap and 2-opt candidate. Unchanged routes are immutable for the
+        lifetime of a candidate, so they can be safely shared.
+        """
+        routes = dict(solution.routes)
+        for technician_id in changed_route_ids:
+            routes[technician_id] = solution.routes[technician_id].copy()
+        return PlanningSolution(
+            routes=routes,
+            unplanned_ticket_ids=set(solution.unplanned_ticket_ids),
+            score=solution.score,
+            total_travel_minutes=solution.total_travel_minutes,
+            total_distance_km=solution.total_distance_km,
+            completed_tickets=solution.completed_tickets,
+            sla_misses=solution.sla_misses,
+            overtime_minutes=solution.overtime_minutes,
+            algorithm_notes=solution.algorithm_notes[:],
         )
+
+    def _cheap_insertion_feasibility_reasons(
+        self,
+        route: MechanicRoute,
+        ticket: TicketInput,
+        position: int,
+        candidate_ticket_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        reasons: list[dict[str, Any]] = []
+        if ticket.urgency != TicketUrgency.URGENT:
+            existing_non_urgent = sum(
+                self.ticket_by_id[ticket_id].service_minutes
+                for ticket_id in route.ticket_ids
+                if self.ticket_by_id[ticket_id].urgency != TicketUrgency.URGENT
+            )
+            if existing_non_urgent + ticket.service_minutes > self.config.initial_non_urgent_minutes_per_technician:
+                reasons.append(
+                    {
+                        "technician_id": route.technician.id,
+                        "technician_name": route.technician.name,
+                        "route_ticket_ids": candidate_ticket_ids,
+                        "reason": "non_urgent_minutes_cap_exceeded",
+                        "non_urgent_minutes": existing_non_urgent + ticket.service_minutes,
+                        "cap_minutes": self.config.initial_non_urgent_minutes_per_technician,
+                        "check_type": "cheap_precheck",
+                    }
+                )
+
+        latest_start = max(0, self.config.latest_ticket_start_route_work_minutes)
+        route_work_before_position = self._route_work_before_ticket_position(route, position)
+        if route_work_before_position is not None and route_work_before_position >= latest_start:
+            reasons.append(
+                {
+                    "technician_id": route.technician.id,
+                    "technician_name": route.technician.name,
+                    "route_ticket_ids": candidate_ticket_ids,
+                    "reason": "ticket_starts_after_latest_route_work_start",
+                    "route_work_minutes_before_inserted_ticket": route_work_before_position,
+                    "latest_ticket_start_route_work_minutes": latest_start,
+                    "check_type": "cheap_precheck",
+                }
+            )
+        return reasons
+
+    def _route_work_before_ticket_position(self, route: MechanicRoute, position: int) -> int | None:
+        if position <= 0:
+            return 0
+        timeline = self._route_timeline(route, include_return_home=False)
+        if timeline is None:
+            return None
+        worked_minutes = 0
+        stops_seen = 0
+        for item in timeline:
+            if isinstance(item, PlannedStop):
+                if stops_seen >= position:
+                    return worked_minutes
+                worked_minutes += item.ticket.service_minutes
+                stops_seen += 1
+            elif isinstance(item, PlannedTravel):
+                worked_minutes += item.travel_minutes
+            elif isinstance(item, PlannedRequirementPickup):
+                worked_minutes += item.duration_minutes
+        return worked_minutes
+
+    def _route_travel_and_distance(self, route: MechanicRoute) -> tuple[int, float]:
+        stats = self._route_evaluation(route)
+        return stats.travel_minutes, stats.distance_km
 
     def _is_solution_hard_feasible(self, solution: PlanningSolution) -> bool:
         return not self._hard_feasibility_reasons(solution)
 
+    def _are_routes_hard_feasible(self, solution: PlanningSolution, route_ids: set[int]) -> bool:
+        return all(
+            not self._hard_feasibility_reasons_for_route(solution.routes[route_id])
+            for route_id in route_ids
+        )
+
     def _hard_feasibility_reasons(self, solution: PlanningSolution) -> list[dict[str, Any]]:
         reasons: list[dict[str, Any]] = []
         for route in solution.routes.values():
-            timeline = self._route_timeline(route, include_return_home=True)
-            if timeline is None:
-                reasons.append(
-                    {
-                        "technician_id": route.technician.id,
-                        "technician_name": route.technician.name,
-                        "route_ticket_ids": route.ticket_ids,
-                        "reason": "timeline_could_not_be_built",
-                        "detail": "Usually caused by inability to place the mandatory lunch break inside the configured break window.",
-                    }
-                )
-                continue
+            reasons.extend(self._hard_feasibility_reasons_for_route(route))
+        return reasons
 
-            non_urgent_minutes = 0
-            route_work_minutes = self._route_work_minutes(timeline)
-            ticket_items = [item for item in timeline if isinstance(item, PlannedStop)]
-            for item in ticket_items:
+    def _hard_feasibility_reasons_for_route(self, route: MechanicRoute) -> list[dict[str, Any]]:
+        reasons: list[dict[str, Any]] = []
+        stats = self._route_evaluation(route)
+        timeline = stats.timeline
+        if timeline is None:
+            return [
+                {
+                    "technician_id": route.technician.id,
+                    "technician_name": route.technician.name,
+                    "route_ticket_ids": route.ticket_ids,
+                    "reason": "timeline_could_not_be_built",
+                    "detail": "Usually caused by inability to place the mandatory lunch break inside the configured break window.",
+                }
+            ]
+
+        if stats.route_end is not None and stats.route_end > planning_day_end(self.config, route.technician):
+            reasons.append(
+                {
+                    "technician_id": route.technician.id,
+                    "technician_name": route.technician.name,
+                    "route_ticket_ids": route.ticket_ids,
+                    "reason": "route_ends_after_workday",
+                    "route_end": stats.route_end.isoformat(),
+                    "workday_end": planning_day_end(self.config, route.technician).isoformat(),
+                    "overtime_minutes": int((stats.route_end - planning_day_end(self.config, route.technician)).total_seconds() // 60),
+                }
+            )
+        if stats.non_urgent_minutes > self.config.initial_non_urgent_minutes_per_technician:
+            reasons.append(
+                {
+                    "technician_id": route.technician.id,
+                    "technician_name": route.technician.name,
+                    "route_ticket_ids": route.ticket_ids,
+                    "reason": "non_urgent_minutes_cap_exceeded",
+                    "non_urgent_minutes": stats.non_urgent_minutes,
+                    "cap_minutes": self.config.initial_non_urgent_minutes_per_technician,
+                }
+            )
+        if self._starts_ticket_after_latest_route_work_start(list(timeline)):
+            reasons.append(
+                {
+                    "technician_id": route.technician.id,
+                    "technician_name": route.technician.name,
+                    "route_ticket_ids": route.ticket_ids,
+                    "reason": "ticket_starts_after_latest_route_work_start",
+                    "route_work_minutes": stats.route_work_minutes,
+                    "latest_ticket_start_route_work_minutes": self.config.latest_ticket_start_route_work_minutes,
+                }
+            )
+        return reasons
+
+    def _route_evaluation(self, route: MechanicRoute) -> RouteEvaluation:
+        key = (route.technician.id, tuple(route.ticket_ids))
+        cached = self._route_evaluation_cache.get(key)
+        if cached is not None:
+            return cached
+
+        timeline_tuple = self._route_timeline_tuple(route, include_return_home=True)
+        if timeline_tuple is None:
+            evaluation = RouteEvaluation(
+                timeline=None,
+                travel_minutes=24 * 60,
+                distance_km=0.0,
+                completed_ticket_ids=frozenset(),
+                completed_count=0,
+                sla_misses=0,
+                overtime_minutes=24 * 60,
+                route_work_minutes=24 * 60,
+                route_work_overflow_penalty=self._route_work_overflow_penalty_points(24 * 60),
+                non_urgent_minutes=0,
+                route_end=None,
+            )
+            self._route_evaluation_cache[key] = evaluation
+            return evaluation
+
+        total_travel = 0
+        total_distance = 0.0
+        completed_ids: set[int] = set()
+        sla_misses = 0
+        non_urgent_minutes = 0
+        for item in timeline_tuple:
+            if isinstance(item, PlannedTravel):
+                total_travel += item.travel_minutes
+                total_distance += item.distance_km
+            elif isinstance(item, PlannedStop):
+                completed_ids.add(item.ticket.id)
+                if item.planned_start_at > item.ticket.deadline_at:
+                    sla_misses += 1
                 if item.ticket.urgency != TicketUrgency.URGENT:
                     non_urgent_minutes += item.ticket.service_minutes
 
-            if timeline:
-                route_end = timeline[-1].planned_end_at
-            else:
-                route_end = planning_day_start(self.config, route.technician)
-            if route_end > planning_day_end(self.config, route.technician):
-                reasons.append(
-                    {
-                        "technician_id": route.technician.id,
-                        "technician_name": route.technician.name,
-                        "route_ticket_ids": route.ticket_ids,
-                        "reason": "route_ends_after_workday",
-                        "route_end": route_end.isoformat(),
-                        "workday_end": planning_day_end(self.config, route.technician).isoformat(),
-                        "overtime_minutes": int((route_end - planning_day_end(self.config, route.technician)).total_seconds() // 60),
-                    }
-                )
-            if non_urgent_minutes > self.config.initial_non_urgent_minutes_per_technician:
-                reasons.append(
-                    {
-                        "technician_id": route.technician.id,
-                        "technician_name": route.technician.name,
-                        "route_ticket_ids": route.ticket_ids,
-                        "reason": "non_urgent_minutes_cap_exceeded",
-                        "non_urgent_minutes": non_urgent_minutes,
-                        "cap_minutes": self.config.initial_non_urgent_minutes_per_technician,
-                    }
-                )
-            if self._starts_ticket_after_latest_route_work_start(timeline):
-                reasons.append(
-                    {
-                        "technician_id": route.technician.id,
-                        "technician_name": route.technician.name,
-                        "route_ticket_ids": route.ticket_ids,
-                        "reason": "ticket_starts_after_latest_route_work_start",
-                        "route_work_minutes": route_work_minutes,
-                        "latest_ticket_start_route_work_minutes": self.config.latest_ticket_start_route_work_minutes,
-                    }
-                )
-        return reasons
+        route_work = self._route_work_minutes(list(timeline_tuple))
+        route_end = timeline_tuple[-1].planned_end_at if timeline_tuple else planning_day_start(self.config, route.technician)
+        day_end = planning_day_end(self.config, route.technician)
+        overtime = int((route_end - day_end).total_seconds() // 60) if route_end > day_end else 0
+        evaluation = RouteEvaluation(
+            timeline=timeline_tuple,
+            travel_minutes=total_travel,
+            distance_km=total_distance,
+            completed_ticket_ids=frozenset(completed_ids),
+            completed_count=len(completed_ids),
+            sla_misses=sla_misses,
+            overtime_minutes=overtime,
+            route_work_minutes=route_work,
+            route_work_overflow_penalty=self._route_work_overflow_penalty_points(route_work),
+            non_urgent_minutes=non_urgent_minutes,
+            route_end=route_end,
+        )
+        self._route_evaluation_cache[key] = evaluation
+        return evaluation
 
     def _score(self, solution: PlanningSolution) -> None:
         total_travel = 0
@@ -762,36 +949,77 @@ class InitialRouteOptimizer:
         planned_ticket_ids: set[int] = set()
 
         for route in solution.routes.values():
-            timeline = self._route_timeline(route, include_return_home=True)
-            if timeline is None:
-                # This should normally be filtered by hard feasibility, but keep
-                # scoring robust for intermediate candidates.
-                overtime += 24 * 60
-                continue
-
-            for item in timeline:
-                if isinstance(item, PlannedTravel):
-                    total_travel += item.travel_minutes
-                    total_distance += item.distance_km
-                elif isinstance(item, PlannedStop):
-                    if item.planned_start_at > item.ticket.deadline_at:
-                        sla_misses += 1
-                    completed += 1
-                    planned_ticket_ids.add(item.ticket.id)
-
-            route_work_overflow_penalty += self._route_work_overflow_penalty_points(
-                self._route_work_minutes(timeline)
-            )
-
-            if timeline:
-                route_end = timeline[-1].planned_end_at
-            else:
-                route_end = planning_day_start(self.config, route.technician)
-            day_end = planning_day_end(self.config, route.technician)
-            if route_end > day_end:
-                overtime += int((route_end - day_end).total_seconds() // 60)
+            stats = self._route_evaluation(route)
+            total_travel += stats.travel_minutes
+            total_distance += stats.distance_km
+            completed += stats.completed_count
+            sla_misses += stats.sla_misses
+            overtime += stats.overtime_minutes
+            route_work_overflow_penalty += stats.route_work_overflow_penalty
+            planned_ticket_ids.update(stats.completed_ticket_ids)
 
         solution.unplanned_ticket_ids = {ticket.id for ticket in self.tickets if ticket.id not in planned_ticket_ids}
+        self._apply_score_totals(
+            solution,
+            total_travel=total_travel,
+            total_distance=total_distance,
+            completed=completed,
+            sla_misses=sla_misses,
+            overtime=overtime,
+            route_work_overflow_penalty=route_work_overflow_penalty,
+        )
+
+    def _score_changed_routes(
+        self,
+        base: PlanningSolution,
+        candidate: PlanningSolution,
+        changed_route_ids: set[int],
+    ) -> None:
+        """Score a local-search candidate by replacing only changed route totals."""
+        total_travel = base.total_travel_minutes
+        total_distance = base.total_distance_km
+        completed = base.completed_tickets
+        sla_misses = base.sla_misses
+        overtime = base.overtime_minutes
+        route_work_overflow_penalty = 0
+
+        # Recompute route-work overflow from all routes through cached route stats.
+        # This keeps the implementation exact while avoiding timeline rebuilds for
+        # unchanged routes.
+        for route in base.routes.values():
+            route_work_overflow_penalty += self._route_evaluation(route).route_work_overflow_penalty
+
+        for route_id in changed_route_ids:
+            old_stats = self._route_evaluation(base.routes[route_id])
+            new_stats = self._route_evaluation(candidate.routes[route_id])
+            total_travel += new_stats.travel_minutes - old_stats.travel_minutes
+            total_distance += new_stats.distance_km - old_stats.distance_km
+            completed += new_stats.completed_count - old_stats.completed_count
+            sla_misses += new_stats.sla_misses - old_stats.sla_misses
+            overtime += new_stats.overtime_minutes - old_stats.overtime_minutes
+            route_work_overflow_penalty += new_stats.route_work_overflow_penalty - old_stats.route_work_overflow_penalty
+
+        self._apply_score_totals(
+            candidate,
+            total_travel=total_travel,
+            total_distance=total_distance,
+            completed=completed,
+            sla_misses=sla_misses,
+            overtime=overtime,
+            route_work_overflow_penalty=route_work_overflow_penalty,
+        )
+
+    def _apply_score_totals(
+        self,
+        solution: PlanningSolution,
+        *,
+        total_travel: int,
+        total_distance: float,
+        completed: int,
+        sla_misses: int,
+        overtime: int,
+        route_work_overflow_penalty: int,
+    ) -> None:
         defer_penalty = self._defer_unplanned_penalty_points()
         unplanned_base_penalty = UNPLANNED_TICKET_PENALTY if self.config.apply_unplanned_base_penalty else 0
         unplanned_penalty = sum(
@@ -1037,6 +1265,29 @@ class InitialRouteOptimizer:
         }
 
     def _route_timeline(
+        self,
+        route: MechanicRoute,
+        *,
+        include_return_home: bool,
+    ) -> list[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak] | None:
+        timeline = self._route_timeline_tuple(route, include_return_home=include_return_home)
+        if timeline is None:
+            return None
+        return list(timeline)
+
+    def _route_timeline_tuple(
+        self,
+        route: MechanicRoute,
+        *,
+        include_return_home: bool,
+    ) -> tuple[PlannedStop | PlannedTravel | PlannedRequirementPickup | PlannedBreak, ...] | None:
+        key = (route.technician.id, tuple(route.ticket_ids), include_return_home)
+        if key not in self._route_timeline_cache:
+            timeline = self._route_timeline_uncached(route, include_return_home=include_return_home)
+            self._route_timeline_cache[key] = None if timeline is None else tuple(timeline)
+        return self._route_timeline_cache[key]
+
+    def _route_timeline_uncached(
         self,
         route: MechanicRoute,
         *,

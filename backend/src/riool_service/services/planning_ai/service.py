@@ -3348,8 +3348,8 @@ def _config_from_payload(payload: dict[str, Any]) -> PlanningConfig:
             payload.get("defer_to_day_3_penalty_minutes") or 120
         ),
         default_service_minutes=int(payload.get("default_service_minutes") or 60),
-        multi_start_iterations=int(payload.get("multi_start_iterations") or 40),
-        local_search_iterations=int(payload.get("local_search_iterations") or 250),
+        multi_start_iterations=int(payload.get("multi_start_iterations") or 10),
+        local_search_iterations=int(payload.get("local_search_iterations") or 60),
         random_seed=payload.get("random_seed", 42),
         refresh_route_cache=bool(payload.get("refresh_route_cache", False)),
         low_priority_max_extra_travel_minutes=int(

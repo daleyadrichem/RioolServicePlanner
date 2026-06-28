@@ -48,8 +48,8 @@ class PlanningConfig:
     # of selecting the most travel-efficient same-day set.
     apply_unplanned_base_penalty: bool = True
     default_service_minutes: int = 60
-    multi_start_iterations: int = 40
-    local_search_iterations: int = 250
+    multi_start_iterations: int = 10
+    local_search_iterations: int = 60
     random_seed: int | None = 42
     refresh_route_cache: bool = False
     low_priority_max_extra_travel_minutes: int = 35

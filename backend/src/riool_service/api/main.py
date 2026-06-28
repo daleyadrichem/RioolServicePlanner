@@ -103,8 +103,8 @@ class InitialPlanningPayload(BaseModel):
     defer_to_day_2_penalty_minutes: int = 45
     defer_to_day_3_penalty_minutes: int = 120
     default_service_minutes: int = 60
-    multi_start_iterations: int = 40
-    local_search_iterations: int = 250
+    multi_start_iterations: int = 10
+    local_search_iterations: int = 60
     random_seed: int | None = 42
     low_priority_max_extra_travel_minutes: int = 35
     incremental_today_reschedule_penalty_minutes: int = 30
