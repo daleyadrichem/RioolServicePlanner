@@ -38,6 +38,7 @@ done
 cleanup() {
   echo ""
   echo "Stopping all processes..."
+  trap - INT TERM EXIT
   kill 0
 }
 
@@ -54,6 +55,14 @@ if [ "$RUN_INSTALL" = true ]; then
 fi
 
 if [ "$RUN_INIT_DB" = true ]; then
+  echo "Creating backend .env file..."
+  cat > "$BACKEND_DIR/.env" <<'EOF'
+DATABASE_URL="sqlite:///./riool_service.db"
+TECHNICIANS_CONFIG_PATH="./config/technicians_config.json"
+TICKET_SCENARIOS_CONFIG_PATH="./config/ticket_scenarios_config.json"
+LOCATIONS_CONFIG_PATH="./config/locations_config.json"
+EOF
+
   echo "Initializing database..."
   cd "$BACKEND_DIR"
   uv run python src/riool_service/database_initializer/initialize_database.py
