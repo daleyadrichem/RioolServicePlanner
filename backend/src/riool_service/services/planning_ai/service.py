@@ -1485,7 +1485,30 @@ def _assignment_has_started_or_is_immutable_operationally(assignment: PlanningAs
     )
 
 
-def _operational_daytime_assignments(assignments: list[PlanningAssignment], base_date: date) -> list[PlanningAssignment]:
+def _assignment_is_unavailable_in_progress(
+    assignment: PlanningAssignment,
+    unavailable_technician_ids: set[int] | None,
+) -> bool:
+    """Return True for the one live-work state that must be replanned.
+
+    Normally an in-progress ticket is fixed because the mechanic is already
+    working on it. If that mechanic is no longer available, the ticket cannot be
+    finished by the same mechanic and must go back into the optimizer.
+    """
+    if not unavailable_technician_ids or assignment.technician_id not in unavailable_technician_ids:
+        return False
+    ticket_status = assignment.ticket.status if assignment.ticket is not None else None
+    return bool(
+        assignment.status == PlanningAssignmentStatus.IN_PROGRESS
+        or ticket_status == TicketStatus.IN_PROGRESS
+    )
+
+
+def _operational_daytime_assignments(
+    assignments: list[PlanningAssignment],
+    base_date: date,
+    unavailable_technician_ids: set[int] | None = None,
+) -> list[PlanningAssignment]:
     return sorted(
         [
             assignment
@@ -1493,6 +1516,7 @@ def _operational_daytime_assignments(assignments: list[PlanningAssignment], base
             if assignment.planned_start_at is not None
             and assignment.planned_start_at.date() == base_date
             and _assignment_has_started_or_is_immutable_operationally(assignment)
+            and not _assignment_is_unavailable_in_progress(assignment, unavailable_technician_ids)
         ],
         key=lambda item: (item.technician_id, item.planned_start_at, item.sequence_order, item.id),
     )
@@ -1530,7 +1554,8 @@ def _preserved_operational_replan_assignments(
             unavailable_technician_ids is not None
             and assignment.technician_id in unavailable_technician_ids
         )
-        should_preserve = operationally_fixed or (planner_locked and not technician_unavailable)
+        unavailable_in_progress = _assignment_is_unavailable_in_progress(assignment, unavailable_technician_ids)
+        should_preserve = (operationally_fixed and not unavailable_in_progress) or (planner_locked and not technician_unavailable)
         if not should_preserve:
             continue
         if assignment.id in seen_assignment_ids:
@@ -1590,6 +1615,7 @@ def _daytime_replan_candidate_tickets(
     base_assignments: list[PlanningAssignment],
     preserved_assignments: list[PlanningAssignment],
     *,
+    unavailable_technician_ids: set[int] | None = None,
     debug_log_path: Path | None = None,
 ) -> list[TicketInput]:
     technician_skill_sets = [technician.requirement_codes for technician in technicians]
@@ -1609,7 +1635,8 @@ def _daytime_replan_candidate_tickets(
         if assignment.ticket.status in TERMINAL_TICKET_STATUSES:
             skipped.append({"source": "previous_assignment", "ticket_id": assignment.ticket_id, "reason": "terminal_ticket_status", "ticket_status": _value(assignment.ticket.status), "assignment": _debug_assignment_dict(assignment)})
             continue
-        if assignment.status != PlanningAssignmentStatus.PLANNED:
+        unavailable_in_progress = _assignment_is_unavailable_in_progress(assignment, unavailable_technician_ids)
+        if assignment.status != PlanningAssignmentStatus.PLANNED and not unavailable_in_progress:
             skipped.append({"source": "previous_assignment", "ticket_id": assignment.ticket_id, "reason": "assignment_status_not_planned", "assignment": _debug_assignment_dict(assignment)})
             continue
         item = _ticket_to_input(assignment.ticket, config)
@@ -1845,7 +1872,11 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
         else None
     )
     technicians = _filter_active_replan_technicians(all_technicians, active_technician_ids)
-    operational_fixed_assignments = _operational_daytime_assignments(base_assignments, base_date)
+    operational_fixed_assignments = _operational_daytime_assignments(
+        base_assignments,
+        base_date,
+        unavailable_technician_ids=unavailable_technician_ids,
+    )
     preserved_assignments = _preserved_operational_replan_assignments(
         base_assignments,
         config,
@@ -1914,6 +1945,7 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
             technicians,
             base_assignments,
             preserved_assignments,
+            unavailable_technician_ids=unavailable_technician_ids,
             debug_log_path=debug_log_path,
         )
         _append_planning_debug_log(
@@ -1960,6 +1992,12 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
             assignment.ticket_id: assignment.ticket.status
             for assignment in base_assignments
             if assignment.ticket_id is not None and assignment.ticket is not None
+        }
+        replanned_unavailable_in_progress_ticket_ids = {
+            assignment.ticket_id
+            for assignment in base_assignments
+            if assignment.ticket_id is not None
+            and _assignment_is_unavailable_in_progress(assignment, unavailable_technician_ids)
         }
         sequence_by_technician: dict[int, int] = {technician.id: 1 for technician in technicians}
         created_assignments: list[PlanningAssignment] = []
@@ -2054,7 +2092,9 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
         if planned_ticket_ids:
             for ticket in session.query(Ticket).filter(Ticket.id.in_(planned_ticket_ids)).all():
                 previous_status = previous_ticket_status_by_ticket_id.get(ticket.id)
-                if previous_status in LOCKED_TICKET_STATUSES or previous_status == TicketStatus.CANCELLED:
+                if ticket.id in replanned_unavailable_in_progress_ticket_ids:
+                    ticket.status = TicketStatus.PLANNED
+                elif previous_status in LOCKED_TICKET_STATUSES or previous_status == TicketStatus.CANCELLED:
                     ticket.status = previous_status
                 elif ticket.status in {TicketStatus.OPEN, TicketStatus.PLANNED}:
                     ticket.status = TicketStatus.PLANNED
@@ -2069,14 +2109,17 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
             for assignment in base_assignments
             if assignment.ticket_id is not None
             and assignment.ticket_id not in preserved_ticket_ids
-            and assignment.status == PlanningAssignmentStatus.PLANNED
+            and (
+                assignment.status == PlanningAssignmentStatus.PLANNED
+                or _assignment_is_unavailable_in_progress(assignment, unavailable_technician_ids)
+            )
             and assignment.ticket is not None
             and assignment.ticket.status not in TERMINAL_TICKET_STATUSES
         }
         unplanned_previous_ticket_ids = previous_replan_ticket_ids - planned_ticket_id_set
         if unplanned_previous_ticket_ids:
             for ticket in session.query(Ticket).filter(Ticket.id.in_(unplanned_previous_ticket_ids)).all():
-                if ticket.status == TicketStatus.PLANNED:
+                if ticket.status in {TicketStatus.PLANNED, TicketStatus.IN_PROGRESS}:
                     ticket.status = TicketStatus.OPEN
 
         summary = _horizon_summary(day_plans, tickets)
