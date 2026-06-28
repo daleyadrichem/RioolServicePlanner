@@ -336,6 +336,28 @@ class InitialRouteOptimizer:
                     best = candidate
                     changed = True
                     break
+            if changed:
+                continue
+
+            # Repair the main blind spot of cheapest insertion: a ticket that was
+            # left unplanned/deferred earlier can be a better local fit than one
+            # of the tickets that happened to be inserted first. This operator
+            # swaps one planned ticket with one currently-unplanned ticket and
+            # reinserts the incoming ticket in the same technician route.
+            for candidate in self._unplanned_replacement_candidates(best):
+                self._score(candidate)
+                if candidate.score < best.score:
+                    self._debug(
+                        "local_search_improvement",
+                        iteration=local_iteration + 1,
+                        operator="unplanned_replacement",
+                        previous_cost=best.score,
+                        new_cost=candidate.score,
+                        score_breakdown=self._score_breakdown(candidate),
+                    )
+                    best = candidate
+                    changed = True
+                    break
             if not changed:
                 self._debug("local_search_stopped_no_improvement", iteration=local_iteration + 1, best_cost=best.score)
                 break
@@ -387,6 +409,67 @@ class InitialRouteOptimizer:
                     candidate.routes[second_id].ticket_ids[second_position] = first_ticket.id
                     if self._is_solution_hard_feasible(candidate):
                         yield candidate
+
+    def _unplanned_replacement_candidates(self, solution: PlanningSolution):
+        """Swap one planned ticket with one unplanned/deferred ticket.
+
+        The normal local-search operators only move/swap/reorder tickets that are
+        already planned for this day. On non-final horizon days, an unplanned
+        ticket is usually just deferred to tomorrow, so replacing a planned low
+        ticket with a geographically better deferred low ticket can reduce travel
+        without changing daily capacity or SLA risk.
+        """
+        if not solution.unplanned_ticket_ids:
+            return
+
+        unplanned_ids = list(solution.unplanned_ticket_ids)
+        self.random.shuffle(unplanned_ids)
+
+        route_ids = list(solution.routes)
+        self.random.shuffle(route_ids)
+        for technician_id in route_ids:
+            route = solution.routes[technician_id]
+            planned_positions = list(range(len(route.ticket_ids)))
+            self.random.shuffle(planned_positions)
+            for planned_position in planned_positions:
+                outgoing_ticket = self.ticket_by_id[route.ticket_ids[planned_position]]
+                for incoming_ticket_id in unplanned_ids:
+                    incoming_ticket = self.ticket_by_id[incoming_ticket_id]
+                    if not self._can_do(route.technician, incoming_ticket):
+                        continue
+                    if not self._can_replace_planned_with_unplanned(outgoing_ticket, incoming_ticket):
+                        continue
+
+                    # Remove the outgoing ticket, then try every insertion point
+                    # for the incoming ticket in the same route. This allows both
+                    # a direct replacement and a small within-route reorder.
+                    for insert_position in range(len(route.ticket_ids)):
+                        candidate = solution.copy()
+                        candidate_route = candidate.routes[technician_id]
+                        candidate_route.ticket_ids.pop(planned_position)
+                        candidate_route.ticket_ids.insert(insert_position, incoming_ticket_id)
+                        if self._is_solution_hard_feasible(candidate):
+                            yield candidate
+
+    def _can_replace_planned_with_unplanned(
+        self,
+        outgoing_ticket: TicketInput,
+        incoming_ticket: TicketInput,
+    ) -> bool:
+        """Protect urgent/medium SLA work while allowing low-vs-low repair.
+
+        A low ticket may not replace urgent/medium work. Medium/urgent replacements
+        are only allowed when the incoming ticket is at least as urgent and does
+        not have a later deadline. Low-vs-low is intentionally open because the
+        defer cost is equal and route efficiency should decide.
+        """
+        if incoming_ticket.id == outgoing_ticket.id:
+            return False
+        if incoming_ticket.urgency_rank > outgoing_ticket.urgency_rank:
+            return False
+        if outgoing_ticket.urgency != TicketUrgency.LOW and incoming_ticket.deadline_at > outgoing_ticket.deadline_at:
+            return False
+        return True
 
     def _two_opt_candidates(self, solution: PlanningSolution):
         route_ids = list(solution.routes)
