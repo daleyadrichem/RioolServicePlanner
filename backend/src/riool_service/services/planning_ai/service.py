@@ -23,6 +23,7 @@ from riool_service.database.models.planning_run import (
     PlanningRunTrigger,
 )
 from riool_service.database.models.tickets import Ticket, TicketStatus, TicketUrgency
+from riool_service.database.models.simulation_state import SimulationState
 from riool_service.database.models.branch import Branch
 from riool_service.database.models.location import Location
 from riool_service.database.models.requirement import Requirement
@@ -1845,6 +1846,92 @@ def _daytime_replan_technicians(
     return adjusted
 
 
+
+
+def _operational_replan_reference_time(session: Session, config: PlanningConfig) -> datetime:
+    """Best effort current time for a mid-day operational replan.
+
+    In simulator-driven scenarios the planning date can be midnight while the
+    actual handoff happens later in the simulated day. Use that simulator clock
+    when it belongs to the same planning day; otherwise fall back to the
+    planning timestamp / wall clock.
+    """
+    state = session.scalar(select(SimulationState).order_by(SimulationState.id.asc()).limit(1))
+    if state is not None and state.current_simulation_time is not None:
+        current_time = state.current_simulation_time
+        if current_time.date() == config.planned_date.date():
+            return current_time
+
+    if config.planned_date is not None and config.planned_date.time() != time.min:
+        return config.planned_date
+    return datetime.utcnow()
+
+
+def _promote_unavailable_in_progress_tickets_to_urgent(
+    session: Session,
+    assignments: list[PlanningAssignment],
+    config: PlanningConfig,
+    unavailable_technician_ids: set[int] | None,
+    *,
+    debug_log_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Make abandoned in-progress work genuinely urgent for the optimizer.
+
+    When a mechanic becomes unavailable while working on a ticket, the ticket is
+    no longer normal low/medium work: somebody else must pick it up today.  The
+    priority change must also refresh deadline_at, otherwise the optimizer keeps
+    using the stale low-priority SLA date (or an old urgent date based on the
+    original creation time) and can defer the ticket into a later horizon day.
+    """
+    if not unavailable_technician_ids:
+        return []
+
+    reference_time = _operational_replan_reference_time(session, config)
+    urgent_deadline = reference_time + timedelta(hours=8)
+    promoted: list[dict[str, Any]] = []
+    seen_ticket_ids: set[int] = set()
+
+    for assignment in assignments:
+        if assignment.ticket_id is None or assignment.ticket is None:
+            continue
+        if assignment.ticket_id in seen_ticket_ids:
+            continue
+        if not _assignment_is_unavailable_in_progress(assignment, unavailable_technician_ids):
+            continue
+        if assignment.ticket.status in TERMINAL_TICKET_STATUSES:
+            continue
+
+        ticket = assignment.ticket
+        old_urgency = _value(ticket.urgency)
+        old_deadline = ticket.deadline_at
+        ticket.urgency = TicketUrgency.URGENT
+        ticket.deadline_at = urgent_deadline
+        seen_ticket_ids.add(int(ticket.id))
+        promoted.append(
+            {
+                "ticket_id": int(ticket.id),
+                "assignment_id": int(assignment.id),
+                "technician_id": int(assignment.technician_id),
+                "old_urgency": old_urgency,
+                "new_urgency": _value(ticket.urgency),
+                "old_deadline_at": _debug_datetime(old_deadline),
+                "new_deadline_at": _debug_datetime(ticket.deadline_at),
+                "reference_time": _debug_datetime(reference_time),
+            }
+        )
+
+    if promoted:
+        session.flush()
+        if debug_log_path is not None:
+            _append_planning_debug_log(
+                debug_log_path,
+                "operational_unavailable_in_progress_tickets_promoted_to_urgent",
+                promoted_ticket_count=len(promoted),
+                promoted_tickets=promoted,
+            )
+    return promoted
+
+
 def _daytime_replan_candidate_tickets(
     session: Session,
     config: PlanningConfig,
@@ -2260,6 +2347,14 @@ def run_operational_replanning(session: Session, payload: dict[str, Any]) -> dic
             preserved_assignments=[_debug_assignment_dict(assignment) for assignment in preserved_assignments],
             preserved_locked_assignment_ids=[assignment.id for assignment in preserved_assignments if assignment.locked_by_planner],
             loaded_technicians=[_debug_technician_input_dict(technician) for technician in technicians],
+        )
+
+        _promote_unavailable_in_progress_tickets_to_urgent(
+            session,
+            base_assignments,
+            config,
+            unavailable_technician_ids,
+            debug_log_path=debug_log_path,
         )
 
         day0_technicians = _daytime_replan_technicians(technicians, operational_fixed_assignments)
