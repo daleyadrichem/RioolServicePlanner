@@ -166,6 +166,13 @@ LOCKED_TICKET_STATUSES = {
     TicketStatus.COMPLETED,
 }
 ACTIVE_PLANNING_RUN_STATUSES = {PlanningRunStatus.PENDING, PlanningRunStatus.RUNNING}
+PLANNING_WORKER_ACTIVE_TICKET_STATUSES = {
+    TicketStatus.OPEN,
+    TicketStatus.PLANNED,
+    TicketStatus.IN_PROGRESS,
+    TicketStatus.DELAYED,
+}
+PLANNING_WORKER_MIN_INITIAL_PLAN_COVERAGE = 0.20
 
 
 def _planning_run_to_status_dict(planning_run: PlanningRun | None) -> dict[str, Any] | None:
@@ -424,6 +431,25 @@ def plan_new_ticket_incrementally(
             "planned": False,
             "ticket_id": ticket_id,
             "reason": "No completed planning run exists yet; incremental insertion needs an existing plan.",
+        }
+
+    readiness = _planning_worker_readiness_for_branch(
+        session,
+        int(ticket.branch_id),
+        latest_run.planned_date.date(),
+    )
+    if not readiness.get("ready"):
+        logger.debug(
+            "Incremental replanner paused for ticket_id=%s branch_id=%s: %s",
+            ticket_id,
+            ticket.branch_id,
+            readiness,
+        )
+        return {
+            "planned": False,
+            "ticket_id": ticket_id,
+            "reason": "Initial planning has not been completed for the active planning day yet.",
+            "readiness": readiness,
         }
 
     config_payload = {
@@ -740,6 +766,8 @@ def plan_next_unplanned_ticket_incrementally(
     )
 
     skipped_planned = 0
+    skipped_initial_not_ready = 0
+    readiness_by_branch: dict[int, dict[str, Any]] = {}
     failures: list[dict[str, Any]] = []
     for ticket in candidates:
         logger.debug(
@@ -748,6 +776,26 @@ def plan_next_unplanned_ticket_incrementally(
             ticket.branch_id,
             ticket.urgency,
         )
+        branch_id = int(ticket.branch_id)
+        readiness = readiness_by_branch.get(branch_id)
+        if readiness is None:
+            latest_run = _latest_completed_planning_run(session, branch_id)
+            planned_day = (
+                latest_run.planned_date.date()
+                if latest_run and latest_run.planned_date
+                else datetime.utcnow().date()
+            )
+            readiness = _planning_worker_readiness_for_branch(session, branch_id, planned_day)
+            readiness_by_branch[branch_id] = readiness
+        if not readiness.get("ready"):
+            skipped_initial_not_ready += 1
+            logger.debug(
+                "Planning worker skipping ticket_id=%s: initial planning not ready for branch_id=%s: %s",
+                ticket.id,
+                ticket.branch_id,
+                readiness,
+            )
+            continue
         if _ticket_is_in_latest_active_plan(session, ticket):
             skipped_planned += 1
             logger.debug("Planning worker skipping ticket_id=%s: already in latest active plan", ticket.id)
@@ -761,8 +809,9 @@ def plan_next_unplanned_ticket_incrementally(
         if result.get("planned"):
             logger.debug("Planning worker successfully planned ticket_id=%s: %s", ticket.id, result)
             return {
-                "checked": len(failures) + skipped_planned + 1,
+                "checked": len(failures) + skipped_planned + skipped_initial_not_ready + 1,
                 "skipped_already_planned": skipped_planned,
+                "skipped_initial_not_ready": skipped_initial_not_ready,
                 **result,
             }
         logger.debug("Planning worker could not plan ticket_id=%s: %s", ticket.id, result)
@@ -770,17 +819,37 @@ def plan_next_unplanned_ticket_incrementally(
 
     if failures:
         logger.debug(
-            "Planning worker scan ended with failures: checked=%s skipped_planned=%s failures=%s",
-            len(failures) + skipped_planned,
+            "Planning worker scan ended with failures: checked=%s skipped_planned=%s skipped_initial_not_ready=%s failures=%s",
+            len(failures) + skipped_planned + skipped_initial_not_ready,
             skipped_planned,
+            skipped_initial_not_ready,
             failures[:5],
         )
         return {
             "planned": False,
-            "checked": len(failures) + skipped_planned,
+            "checked": len(failures) + skipped_planned + skipped_initial_not_ready,
             "skipped_already_planned": skipped_planned,
+            "skipped_initial_not_ready": skipped_initial_not_ready,
             "reason": "Unplanned ticket(s) were found, but none could be inserted by the incremental replanner.",
             "failures": failures[:5],
+        }
+    if skipped_initial_not_ready:
+        readiness_reasons = [
+            readiness for readiness in readiness_by_branch.values() if not readiness.get("ready")
+        ]
+        logger.debug(
+            "Planning worker scan paused: checked=%s skipped_initial_not_ready=%s readiness=%s",
+            len(candidates),
+            skipped_initial_not_ready,
+            readiness_reasons,
+        )
+        return {
+            "planned": False,
+            "checked": len(candidates),
+            "skipped_already_planned": skipped_planned,
+            "skipped_initial_not_ready": skipped_initial_not_ready,
+            "reason": "Initial planning is not ready yet; incremental planning is paused.",
+            "readiness": readiness_reasons,
         }
     logger.debug(
         "Planning worker scan ended: no open unplanned tickets found. checked=%s skipped_planned=%s",
@@ -791,6 +860,7 @@ def plan_next_unplanned_ticket_incrementally(
         "planned": False,
         "checked": len(candidates),
         "skipped_already_planned": skipped_planned,
+        "skipped_initial_not_ready": skipped_initial_not_ready,
         "reason": "No open unplanned tickets found.",
     }
 
@@ -2320,6 +2390,139 @@ def _latest_completed_planning_run(session: Session, branch_id: int) -> Planning
         .order_by(PlanningRun.completed_at.desc().nullslast(), PlanningRun.id.desc())
         .limit(1)
     )
+
+
+def _latest_completed_planning_run_for_day(
+    session: Session,
+    branch_id: int,
+    planned_day: date,
+) -> PlanningRun | None:
+    runs = session.scalars(
+        select(PlanningRun)
+        .where(
+            PlanningRun.branch_id == branch_id,
+            PlanningRun.status == PlanningRunStatus.COMPLETED,
+        )
+        .order_by(PlanningRun.completed_at.desc().nullslast(), PlanningRun.id.desc())
+    ).all()
+    return next((run for run in runs if run.planned_date and run.planned_date.date() == planned_day), None)
+
+
+def _latest_completed_initial_planning_run_for_day(
+    session: Session,
+    branch_id: int,
+    planned_day: date,
+) -> PlanningRun | None:
+    runs = session.scalars(
+        select(PlanningRun)
+        .where(
+            PlanningRun.branch_id == branch_id,
+            PlanningRun.status == PlanningRunStatus.COMPLETED,
+            PlanningRun.trigger_type == PlanningRunTrigger.DAILY_START,
+        )
+        .order_by(PlanningRun.completed_at.desc().nullslast(), PlanningRun.id.desc())
+    ).all()
+    return next((run for run in runs if run.planned_date and run.planned_date.date() == planned_day), None)
+
+
+def _active_ticket_count_for_branch(session: Session, branch_id: int) -> int:
+    return int(
+        session.scalar(
+            select(func.count(Ticket.id)).where(
+                Ticket.branch_id == branch_id,
+                Ticket.status.in_(list(PLANNING_WORKER_ACTIVE_TICKET_STATUSES)),
+            )
+        )
+        or 0
+    )
+
+
+def _current_ticket_assignment_count_for_run(session: Session, planning_run_id: int, branch_id: int) -> int:
+    return int(
+        session.scalar(
+            select(func.count(func.distinct(PlanningAssignment.ticket_id)))
+            .join(Ticket, Ticket.id == PlanningAssignment.ticket_id)
+            .where(
+                PlanningAssignment.planning_run_id == planning_run_id,
+                PlanningAssignment.branch_id == branch_id,
+                PlanningAssignment.status.in_(VISIBLE_ASSIGNMENT_STATUSES),
+                Ticket.branch_id == branch_id,
+                Ticket.status.in_(list(PLANNING_WORKER_ACTIVE_TICKET_STATUSES)),
+            )
+        )
+        or 0
+    )
+
+
+def _planning_worker_readiness_for_branch(
+    session: Session,
+    branch_id: int,
+    planned_day: date,
+) -> dict[str, Any]:
+    latest_run = _latest_completed_planning_run_for_day(session, branch_id, planned_day)
+    if latest_run is None:
+        return {
+            "ready": False,
+            "branch_id": branch_id,
+            "planned_date": planned_day.isoformat(),
+            "reason": "No completed planning run exists for this branch and planning day yet.",
+        }
+
+    initial_run = _latest_completed_initial_planning_run_for_day(session, branch_id, planned_day)
+    if initial_run is None:
+        return {
+            "ready": False,
+            "branch_id": branch_id,
+            "planned_date": planned_day.isoformat(),
+            "latest_planning_run_id": latest_run.id,
+            "latest_trigger_type": _value(latest_run.trigger_type),
+            "reason": "No completed DAILY_START initial planning run exists for this branch and planning day yet.",
+        }
+
+    active_ticket_count = _active_ticket_count_for_branch(session, branch_id)
+    current_assignment_count = _current_ticket_assignment_count_for_run(session, latest_run.id, branch_id)
+    coverage = 1.0 if active_ticket_count == 0 else current_assignment_count / active_ticket_count
+
+    # Scenario regeneration removes simulator-generated tickets and their dependent
+    # planning assignments, but it intentionally leaves planning_runs for history.
+    # The completed DAILY_START run is the definitive signal, while this coverage
+    # check prevents a stale historical run with no current assignments from
+    # unlocking the incremental single-ticket planner for a newly generated day.
+    if active_ticket_count and coverage < PLANNING_WORKER_MIN_INITIAL_PLAN_COVERAGE:
+        empty_initial_run = (
+            latest_run.id == initial_run.id
+            and int(latest_run.score_completed_tickets or 0) == 0
+            and int(latest_run.score_unplanned_tickets or 0) == 0
+        )
+        if not empty_initial_run:
+            return {
+                "ready": False,
+                "branch_id": branch_id,
+                "planned_date": planned_day.isoformat(),
+                "initial_planning_run_id": initial_run.id,
+                "latest_planning_run_id": latest_run.id,
+                "latest_trigger_type": _value(latest_run.trigger_type),
+                "active_ticket_count": active_ticket_count,
+                "current_assignment_count": current_assignment_count,
+                "coverage": round(coverage, 3),
+                "minimum_coverage": PLANNING_WORKER_MIN_INITIAL_PLAN_COVERAGE,
+                "reason": (
+                    "A completed initial planning run exists, but the latest visible plan covers "
+                    "too few current tickets. Treating it as stale until initial planning is run again."
+                ),
+            }
+
+    return {
+        "ready": True,
+        "branch_id": branch_id,
+        "planned_date": planned_day.isoformat(),
+        "initial_planning_run_id": initial_run.id,
+        "latest_planning_run_id": latest_run.id,
+        "latest_trigger_type": _value(latest_run.trigger_type),
+        "active_ticket_count": active_ticket_count,
+        "current_assignment_count": current_assignment_count,
+        "coverage": round(coverage, 3),
+    }
 
 
 def _overview_technicians(session: Session, branch_id: int) -> list[Technician]:
